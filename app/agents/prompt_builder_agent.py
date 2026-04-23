@@ -6,7 +6,7 @@ from app.agents.schemas import PromptPackOutput
 
 def build_prompt_builder_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("prompt_builder"),
         tools=[],
         system_prompt=(
             "你是AI编程协作专家。"

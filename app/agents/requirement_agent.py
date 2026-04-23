@@ -10,7 +10,7 @@ from app.tools.requirement_tools import (
 
 def build_requirement_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("requirement"),
         tools=[extract_plain_text_requirement, detect_requirement_gaps],
         system_prompt=(
             "你是资深需求分析师。"

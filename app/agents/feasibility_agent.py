@@ -6,7 +6,7 @@ from app.agents.schemas import FeasibilityReport
 
 def build_feasibility_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("feasibility"),
         tools=[],
         system_prompt=(
             "你是资深技术负责人。"

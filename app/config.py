@@ -40,6 +40,12 @@ class Settings:
     llm_enable_thinking: Optional[bool] = parse_optional_bool(
         os.getenv("LLM_ENABLE_THINKING", "")
     )
+    requirement_llm_model: str = os.getenv("REQUIREMENT_LLM_MODEL", "")
+    feasibility_llm_model: str = os.getenv("FEASIBILITY_LLM_MODEL", "")
+    architect_llm_model: str = os.getenv("ARCHITECT_LLM_MODEL", "")
+    planner_llm_model: str = os.getenv("PLANNER_LLM_MODEL", "")
+    prompt_builder_llm_model: str = os.getenv("PROMPT_BUILDER_LLM_MODEL", "")
+    reviewer_llm_model: str = os.getenv("REVIEWER_LLM_MODEL", "")
 
     # OpenAI-compatible (OpenAI/Azure/OpenRouter)
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")

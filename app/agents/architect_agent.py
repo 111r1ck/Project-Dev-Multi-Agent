@@ -7,7 +7,7 @@ from app.tools.architecture_tools import suggest_architecture_style
 
 def build_architect_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("architect"),
         tools=[suggest_architecture_style],
         system_prompt=(
             "你是系统架构师。"

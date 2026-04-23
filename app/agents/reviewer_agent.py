@@ -6,7 +6,7 @@ from app.agents.schemas import ReviewReport
 
 def build_reviewer_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("reviewer"),
         tools=[],
         system_prompt=(
             "你是技术评审专家。"

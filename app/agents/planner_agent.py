@@ -7,7 +7,7 @@ from app.tools.planning_tools import estimate_task_size
 
 def build_planner_agent():
     return create_agent(
-        model=get_llm(),
+        model=get_llm("planner"),
         tools=[estimate_task_size],
         system_prompt=(
             "你是研发项目经理。"

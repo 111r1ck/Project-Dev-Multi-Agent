@@ -3,6 +3,15 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from app.config import settings
 
+AGENT_MODEL_OVERRIDES = {
+    "requirement": "requirement_llm_model",
+    "feasibility": "feasibility_llm_model",
+    "architect": "architect_llm_model",
+    "planner": "planner_llm_model",
+    "prompt_builder": "prompt_builder_llm_model",
+    "reviewer": "reviewer_llm_model",
+}
+
 
 def _default_model_for(provider: str) -> str:
     defaults = {
@@ -17,7 +26,13 @@ def _default_model_for(provider: str) -> str:
     return defaults.get(provider, "gpt-5")
 
 
-def _resolve_model(provider: str) -> str:
+def _resolve_model(provider: str, agent_key: str | None = None) -> str:
+    if agent_key:
+        attr_name = AGENT_MODEL_OVERRIDES.get(agent_key)
+        if attr_name:
+            override = getattr(settings, attr_name, "")
+            if override and override.strip():
+                return override.strip()
     model = settings.llm_model.strip() if settings.llm_model else ""
     if model:
         return model
@@ -43,9 +58,9 @@ def _openai_extra_body(provider: str, model: str) -> dict:
     return extra_body
 
 
-def get_llm() -> BaseChatModel:
+def get_llm(agent_key: str | None = None) -> BaseChatModel:
     provider = settings.llm_provider.lower().strip()
-    model = _resolve_model(provider)
+    model = _resolve_model(provider, agent_key=agent_key)
     temperature = settings.llm_temperature
 
     if provider == "openai":

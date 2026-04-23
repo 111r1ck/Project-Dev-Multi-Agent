@@ -22,6 +22,14 @@ LLM 提供商切换（默认 `openai`）：
 - `LLM_MODEL=...`
 - `LLM_TEMPERATURE=0.2`
 - `LLM_ENABLE_THINKING=true|false`（留空表示自动；DashScope + Qwen 默认自动关闭，避免 tool_choice 冲突）
+- 可选按 agent 覆盖模型：
+  - `REQUIREMENT_LLM_MODEL=...`
+  - `FEASIBILITY_LLM_MODEL=...`
+  - `ARCHITECT_LLM_MODEL=...`
+  - `PLANNER_LLM_MODEL=...`
+  - `PROMPT_BUILDER_LLM_MODEL=...`
+  - `REVIEWER_LLM_MODEL=...`
+  - 若不设置则回退到全局 `LLM_MODEL`
 
 示例：
 
