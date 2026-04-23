@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Agent Runner</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
+
+    :root {
+      --bg: #f6f3ee;
+      --panel: #fffdf7;
+      --ink: #1b1b1f;
+      --sub: #5d5a53;
+      --line: #d8d2c8;
+      --accent: #0f766e;
+      --accent-2: #f97316;
+      --ok: #166534;
+      --warn: #b45309;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 100% 0%, #ffe6c7 0, transparent 35%),
+        radial-gradient(circle at 0% 100%, #c4f1ec 0, transparent 42%),
+        var(--bg);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .wrap {
+      max-width: 1440px;
+      margin: 24px auto 48px;
+      padding: 0 20px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #1f2937, #0f766e);
+      color: #f7fafc;
+      border-radius: 16px;
+      padding: 18px 18px;
+    }
+
+    .hero h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: 0.2px;
+    }
+    .hero p { margin: 0; opacity: .9; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.04);
+      min-width: 0;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--sub);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font: inherit;
+      background: #fff;
+    }
+    textarea { min-height: 120px; resize: vertical; }
+
+    .row { display: grid; gap: 10px; margin-bottom: 10px; }
+    .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+      transition: transform .12s ease, opacity .2s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button.secondary { background: #334155; }
+    button.warn { background: var(--accent-2); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+
+    .status {
+      display: inline-block;
+      font-size: 12px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      margin-left: 6px;
+    }
+    .status.completed { color: var(--ok); border-color: #7dd3a7; background: #f0fdf4; }
+    .status.interrupted { color: var(--warn); border-color: #fdba74; background: #fff7ed; }
+
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      max-height: 290px;
+      overflow: auto;
+      max-width: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      margin: 10px 0 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>LangGraph Multi-Agent Console</h1>
+      <p>运行工作流、查看 checkpoint、处理中断并继续执行。</p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>1) 运行任务</h2>
+        <div class="row">
+          <div>
+            <label>Project ID</label>
+            <input id="projectId" value="mall-001" placeholder="mall-001" />
+          </div>
+          <div>
+            <label>Raw Requirement</label>
+            <textarea id="rawRequirement">开发一个社区电商商城，支持商品浏览、购物车、下单、支付、订单管理和多小区切换。</textarea>
+          </div>
+        </div>
+        <div class="btns">
+          <button id="runBtn">执行 /runs</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>2) 状态与历史</h2>
+        <div class="btns">
+          <button id="stateBtn" class="secondary">刷新 state</button>
+          <button id="historyBtn" class="secondary">刷新 history</button>
+        </div>
+        <pre id="statePre">{}</pre>
+        <pre id="historyPre">{}</pre>
+      </article>
+
+      <article class="card">
+        <h2>3) 人工补充并恢复</h2>
+        <div>
+          <label>Human Feedback (JSON)</label>
+          <textarea id="feedbackText">{
+  "支付渠道": "MVP只做微信支付，退款原路退回",
+  "小区切换规则": "手动选择优先，不支持跨小区混合下单",
+  "RBAC": "用户/商家/管理员三角色",
+  "部署与监控": "云部署，日志+监控标准化",
+  "库存扣减策略": "下单预扣减，超时回滚"
+}</textarea>
+        </div>
+        <div class="btns">
+          <button id="resumeBtn" class="warn">执行 /resume</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>结果 <span id="statusTag" class="status"></span></h2>
+      <pre id="resultPre">{}</pre>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      let loading = false;
+      const $ = (id) => document.getElementById(id);
+
+      const projectId = $("projectId");
+      const rawRequirement = $("rawRequirement");
+      const feedbackText = $("feedbackText");
+      const resultPre = $("resultPre");
+      const statePre = $("statePre");
+      const historyPre = $("historyPre");
+      const statusTag = $("statusTag");
+
+      const runBtn = $("runBtn");
+      const stateBtn = $("stateBtn");
+      const historyBtn = $("historyBtn");
+      const resumeBtn = $("resumeBtn");
+
+      function pretty(v) {
+        return JSON.stringify(v, null, 2);
+      }
+
+      function setLoading(v) {
+        loading = v;
+        runBtn.disabled = v;
+        stateBtn.disabled = v;
+        historyBtn.disabled = v;
+        resumeBtn.disabled = v;
+      }
+
+      function setResult(data) {
+        resultPre.textContent = pretty(data);
+        const status = data && data.status ? String(data.status) : "";
+        statusTag.textContent = status;
+        statusTag.className = "status";
+        if (status) statusTag.classList.add(status);
+      }
+
+      async function callApi(url, options) {
+        const res = await fetch(url, options || {});
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (_) {}
+        if (!res.ok) {
+          throw new Error((data && (data.detail || JSON.stringify(data))) || res.statusText);
+        }
+        return data;
+      }
+
+      async function loadState() {
+        const pid = encodeURIComponent(projectId.value.trim());
+        const data = await callApi("/runs/" + pid + "/state");
+        statePre.textContent = pretty(data);
+      }
+
+      async function loadHistory() {
+        const pid = encodeURIComponent(projectId.value.trim());
+        const data = await callApi("/runs/" + pid + "/history?limit=20");
+        historyPre.textContent = pretty(data);
+      }
+
+      runBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          const data = await callApi("/runs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              project_id: projectId.value.trim(),
+              raw_requirement: rawRequirement.value
+            })
+          });
+          setResult(data);
+          await loadState();
+          await loadHistory();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      resumeBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          const pid = encodeURIComponent(projectId.value.trim());
+          const parsed = JSON.parse(feedbackText.value);
+          const data = await callApi("/runs/" + pid + "/resume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ human_feedback: parsed })
+          });
+          setResult(data);
+          await loadState();
+          await loadHistory();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      stateBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          await loadState();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      historyBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          await loadHistory();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      loadState().catch(function () {});
+      loadHistory().catch(function () {});
+    })();
+  </script>
+</body>
+</html>
