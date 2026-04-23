@@ -81,6 +81,13 @@ class Settings:
     checkpointer_postgres_auto_setup: bool = parse_bool(
         os.getenv("CHECKPOINTER_POSTGRES_AUTO_SETUP", ""), True
     )
+    rate_limit_enabled: bool = parse_bool(os.getenv("RATE_LIMIT_ENABLED", ""), False)
+    redis_url: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    rate_limit_prefix: str = os.getenv("RATE_LIMIT_PREFIX", "rl")
+    rate_limit_window_seconds: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+    rate_limit_runs_per_window: int = int(
+        os.getenv("RATE_LIMIT_RUNS_PER_WINDOW", "60")
+    )
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
 
 

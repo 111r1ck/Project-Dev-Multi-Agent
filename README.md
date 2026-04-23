@@ -61,6 +61,10 @@ pip install -e .[dev,providers]
 - `CHECKPOINTER_POSTGRES_DSN=postgresql://...` 指定 PostgreSQL 连接串
 - `CHECKPOINTER_POSTGRES_PIPELINE=false` 是否启用 pipeline
 - `CHECKPOINTER_POSTGRES_AUTO_SETUP=true` 首次启动自动创建 checkpoint 表
+- `RATE_LIMIT_ENABLED=false` 是否启用 Redis 限流
+- `REDIS_URL=redis://127.0.0.1:6379/0` Redis 地址
+- `RATE_LIMIT_WINDOW_SECONDS=60` 限流窗口（秒）
+- `RATE_LIMIT_RUNS_PER_WINDOW=60` `/runs` 系列接口每窗口允许请求数
 - `HUMAN_GATE_MAX_ROUNDS=3` 人工补充最多轮次，达到后自动继续到后续节点
 
 3. 启动服务
