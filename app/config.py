@@ -94,6 +94,12 @@ class Settings:
     rate_limit_runs_per_window: int = int(
         os.getenv("RATE_LIMIT_RUNS_PER_WINDOW", "60")
     )
+    prompt_cache_enabled: bool = parse_bool(os.getenv("PROMPT_CACHE_ENABLED", ""), False)
+    prompt_cache_prefix: str = os.getenv("PROMPT_CACHE_PREFIX", "prompt_cache")
+    prompt_cache_ttl_seconds: int = int(os.getenv("PROMPT_CACHE_TTL_SECONDS", "86400"))
+    reviewer_cache_enabled: bool = parse_bool(os.getenv("REVIEWER_CACHE_ENABLED", ""), False)
+    reviewer_cache_prefix: str = os.getenv("REVIEWER_CACHE_PREFIX", "reviewer_cache")
+    reviewer_cache_ttl_seconds: int = int(os.getenv("REVIEWER_CACHE_TTL_SECONDS", "21600"))
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
     review_max_rounds: int = int(os.getenv("REVIEW_MAX_ROUNDS", "2"))
 

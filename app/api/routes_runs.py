@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -12,6 +13,8 @@ from app.storage.checkpoints import purge_thread_checkpoints
 from langgraph.types import Command
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+_CONTINUE_JOBS: dict[str, threading.Thread] = {}
+_CONTINUE_JOBS_LOCK = threading.RLock()
 
 
 class RunRequest(BaseModel):
@@ -58,11 +61,12 @@ def _serialize_snapshot(snapshot: Any) -> dict[str, Any]:
 
 
 def _format_run_response(project_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    if "__interrupt__" in result:
-        interrupts = []
-        for item in result["__interrupt__"]:
-            interrupts.append(_serialize_interrupt(item))
+    raw_interrupts = result.get("__interrupt__", [])
+    interrupts = []
+    for item in raw_interrupts or []:
+        interrupts.append(_serialize_interrupt(item))
 
+    if interrupts:
         return {
             "project_id": project_id,
             "status": "interrupted",
@@ -76,6 +80,24 @@ def _format_run_response(project_id: str, result: dict[str, Any]) -> dict[str, A
         "result": render_result(result),
         "state": result,
     }
+
+
+def _snapshot_has_pending_interrupt(snapshot: Any) -> bool:
+    tasks = getattr(snapshot, "tasks", ()) or ()
+    for task in tasks:
+        if getattr(task, "interrupts", ()) or ():
+            return True
+    return False
+
+
+def _run_continue_in_background(compiled_graph: Any, config: dict[str, Any], project_id: str) -> None:
+    try:
+        compiled_graph.invoke(None, config)
+    finally:
+        with _CONTINUE_JOBS_LOCK:
+            current = _CONTINUE_JOBS.get(project_id)
+            if current is threading.current_thread():
+                _CONTINUE_JOBS.pop(project_id, None)
 
 
 @router.post("")
@@ -118,6 +140,60 @@ async def resume_project_analysis(
         config,
     )
     return _format_run_response(project_id, result)
+
+
+@router.post("/{project_id}/continue")
+async def continue_project_analysis(
+    project_id: str,
+    compiled_graph=Depends(get_compiled_graph),
+):
+    config = {"configurable": {"thread_id": project_id}}
+    snapshot = compiled_graph.get_state(config)
+    next_nodes = list(getattr(snapshot, "next", ()) or ())
+
+    if _snapshot_has_pending_interrupt(snapshot):
+        return {
+            "project_id": project_id,
+            "status": "interrupted",
+            "message": "当前流程处于人工中断等待状态，请调用 /runs/{project_id}/resume 继续。",
+            "next": next_nodes,
+        }
+
+    if not next_nodes:
+        values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+        return {
+            "project_id": project_id,
+            "status": "completed",
+            "message": "流程已完成，无需继续执行。",
+            "result": render_result(values),
+            "state": values,
+        }
+
+    with _CONTINUE_JOBS_LOCK:
+        running_job = _CONTINUE_JOBS.get(project_id)
+        if running_job is not None and running_job.is_alive():
+            return {
+                "project_id": project_id,
+                "status": "in_progress",
+                "next": next_nodes,
+                "message": "已有继续执行任务在后台运行，请稍后刷新 state/history。",
+            }
+
+        job = threading.Thread(
+            target=_run_continue_in_background,
+            args=(compiled_graph, config, project_id),
+            daemon=True,
+            name=f"continue-{project_id}",
+        )
+        _CONTINUE_JOBS[project_id] = job
+        job.start()
+
+    return {
+        "project_id": project_id,
+        "status": "in_progress",
+        "next": next_nodes,
+        "message": "已在后台继续执行，请稍后刷新 state/history。",
+    }
 
 
 @router.get("/{project_id}/state")

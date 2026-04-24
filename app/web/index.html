@@ -574,6 +574,7 @@
           </div>
           <div class="btns">
             <button id="runBtn">执行 /runs</button>
+            <button id="continueBtn" class="secondary">执行 /continue</button>
           </div>
         </article>
 
@@ -792,6 +793,7 @@
   <script>
     (function () {
       let loading = false;
+      let loadingCount = 0;
       const $ = (id) => document.getElementById(id);
 
       const projectId = $("projectId");
@@ -812,6 +814,7 @@
       const navAgentEditor = $("navAgentEditor");
 
       const runBtn = $("runBtn");
+      const continueBtn = $("continueBtn");
       const stateBtn = $("stateBtn");
       const historyBtn = $("historyBtn");
       const hydrateResultBtn = $("hydrateResultBtn");
@@ -885,19 +888,26 @@
       }
 
       function setLoading(v) {
-        loading = v;
-        runBtn.disabled = v;
-        stateBtn.disabled = v;
-        historyBtn.disabled = v;
-        hydrateResultBtn.disabled = v;
-        purgeBtn.disabled = v;
-        genProjectIdBtn.disabled = v;
-        agentLoadBtn.disabled = v;
-        agentSaveBtn.disabled = v;
-        persistEnvBtn.disabled = v;
-        secretToggleBtn.disabled = v;
-        resumeBtn.disabled = v;
-        loadMissingBtn.disabled = v;
+        if (v) {
+          loadingCount += 1;
+        } else {
+          loadingCount = Math.max(0, loadingCount - 1);
+        }
+        loading = loadingCount > 0;
+
+        runBtn.disabled = loading;
+        continueBtn.disabled = loading;
+        stateBtn.disabled = loading;
+        historyBtn.disabled = loading;
+        hydrateResultBtn.disabled = loading;
+        purgeBtn.disabled = loading;
+        genProjectIdBtn.disabled = loading;
+        agentLoadBtn.disabled = loading;
+        agentSaveBtn.disabled = loading;
+        persistEnvBtn.disabled = loading;
+        secretToggleBtn.disabled = loading;
+        resumeBtn.disabled = loading;
+        loadMissingBtn.disabled = loading;
       }
 
       function switchView(viewName) {
@@ -1148,12 +1158,18 @@
         );
         const currentInterruptCount = Array.isArray(data.interrupts) ? data.interrupts.length : 0;
         if (data.status === "interrupted") {
-          summary.interrupt_count = humanRounds + 1;
+          summary.interrupt_count = currentInterruptCount > 0 ? (humanRounds + 1) : humanRounds;
           summary.current_interrupt_count = currentInterruptCount;
           summary.human_rounds = humanRounds;
           summary.first_interrupt = Array.isArray(data.interrupts) && data.interrupts.length > 0
             ? data.interrupts[0]
             : null;
+        }
+        if (data.status === "in_progress") {
+          summary.interrupt_count = humanRounds;
+          summary.human_rounds = humanRounds;
+          summary.next = Array.isArray(data.next) ? data.next : [];
+          summary.message = "流程仍在执行中，请稍后刷新 state/history。";
         }
         if (data.status === "completed" && data.result) {
           summary.interrupt_count = humanRounds;
@@ -1293,10 +1309,23 @@
         }
 
         if (Array.isArray(snapshot.next) && snapshot.next.length > 0) {
+          const stateInterrupts = Array.isArray(values.__interrupt__) ? values.__interrupt__ : [];
+          if (stateInterrupts.length > 0) {
+            setResult({
+              project_id: snapshot.project_id,
+              status: "interrupted",
+              interrupts: stateInterrupts.map((item) =>
+                item && typeof item === "object" && "value" in item ? item.value : item
+              ),
+              state: values,
+              source: "state_snapshot"
+            });
+            return;
+          }
           setResult({
             project_id: snapshot.project_id,
-            status: "interrupted",
-            interrupts: [],
+            status: "in_progress",
+            next: snapshot.next,
             state: values,
             source: "state_snapshot"
           });
@@ -1338,6 +1367,25 @@
               project_id: pidRaw,
               raw_requirement: rawRequirement.value
             })
+          });
+          setResult(data);
+          await loadState();
+          await loadHistory();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      continueBtn.addEventListener("click", async function () {
+        const pidRaw = getProjectIdOrError();
+        if (!pidRaw) return;
+        setLoading(true);
+        try {
+          const pid = encodeURIComponent(pidRaw);
+          const data = await callApi("/runs/" + pid + "/continue", {
+            method: "POST"
           });
           setResult(data);
           await loadState();
