@@ -43,3 +43,28 @@ def summarize_prompt_pack(prompt_pack: list[dict[str, Any]], max_items: int = 8)
     if len(prompt_pack) > max_items:
         lines.append(f"... and {len(prompt_pack) - max_items} more prompt items")
     return "\n".join(lines)
+
+
+def summarize_review_feedback(
+    review_report: dict[str, Any],
+    max_issues: int = 8,
+    max_suggestions: int = 8,
+) -> str:
+    issues = review_report.get("issues", []) if isinstance(review_report, dict) else []
+    suggestions = (
+        review_report.get("suggestions", []) if isinstance(review_report, dict) else []
+    )
+    lines: list[str] = []
+    if issues:
+        lines.append("评审问题(issues):")
+        for item in issues[:max_issues]:
+            lines.append(f"- {item}")
+        if len(issues) > max_issues:
+            lines.append(f"... and {len(issues) - max_issues} more issues")
+    if suggestions:
+        lines.append("评审建议(suggestions):")
+        for item in suggestions[:max_suggestions]:
+            lines.append(f"- {item}")
+        if len(suggestions) > max_suggestions:
+            lines.append(f"... and {len(suggestions) - max_suggestions} more suggestions")
+    return "\n".join(lines)

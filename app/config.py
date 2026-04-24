@@ -95,6 +95,7 @@ class Settings:
         os.getenv("RATE_LIMIT_RUNS_PER_WINDOW", "60")
     )
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
+    review_max_rounds: int = int(os.getenv("REVIEW_MAX_ROUNDS", "2"))
 
 
 settings = Settings()

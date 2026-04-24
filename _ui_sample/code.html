@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="zh"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Orchestrator AI - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-bright": "#31394d",
+                        "on-primary-fixed-variant": "#005236",
+                        "primary-fixed-dim": "#4edea3",
+                        "on-secondary-container": "#83c2a9",
+                        "on-surface-variant": "#bbcabf",
+                        "on-background": "#dae2fd",
+                        "inverse-primary": "#006c49",
+                        "on-error": "#690005",
+                        "inverse-surface": "#dae2fd",
+                        "inverse-on-surface": "#283044",
+                        "tertiary-container": "#00b982",
+                        "primary-container": "#10b981",
+                        "on-tertiary": "#003825",
+                        "primary-fixed": "#6ffbbe",
+                        "surface-tint": "#4edea3",
+                        "surface": "#0b1326",
+                        "on-secondary-fixed-variant": "#0b513d",
+                        "outline-variant": "#3c4a42",
+                        "surface-dim": "#0b1326",
+                        "tertiary-fixed": "#68fcbf",
+                        "primary": "#4edea3",
+                        "on-primary": "#003824",
+                        "on-secondary-fixed": "#002117",
+                        "surface-container-highest": "#2d3449",
+                        "on-tertiary-fixed": "#002114",
+                        "on-primary-fixed": "#002113",
+                        "outline": "#86948a",
+                        "surface-container-high": "#222a3d",
+                        "secondary": "#95d3ba",
+                        "secondary-fixed": "#b0f0d6",
+                        "on-tertiary-container": "#00422c",
+                        "surface-variant": "#2d3449",
+                        "on-error-container": "#ffdad6",
+                        "tertiary": "#45dfa4",
+                        "surface-container-lowest": "#060e20",
+                        "surface-container": "#171f33",
+                        "error-container": "#93000a",
+                        "on-primary-container": "#00422b",
+                        "error": "#ffb4ab",
+                        "secondary-fixed-dim": "#95d3ba",
+                        "on-secondary": "#003829",
+                        "background": "#0b1326",
+                        "on-surface": "#dae2fd",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "surface-container-low": "#131b2e",
+                        "secondary-container": "#0b513d"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "gutter": "20px",
+                        "xl": "48px",
+                        "sm": "8px",
+                        "xs": "4px",
+                        "md": "16px",
+                        "lg": "24px",
+                        "container-margin": "32px",
+                        "base": "4px"
+                    },
+                    fontFamily: {
+                        "headline-md": ["Inter"],
+                        "code-sm": ["monospace"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Space Grotesk"],
+                        "headline-lg": ["Inter"]
+                    },
+                    fontSize: {
+                        "headline-md": ["24px", { "lineHeight": "1.3", "fontWeight": "600" }],
+                        "code-sm": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                        "label-caps": ["12px", { "lineHeight": "1.0", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-lg": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: theme('colors.background'); color: theme('colors.on-surface'); }
+        .glass-card {
+            background-color: theme('colors.surface-container');
+            border: 1px solid theme('colors.outline-variant');
+            backdrop-filter: blur(12px);
+            border-radius: theme('borderRadius.xl');
+        }
+        .code-block {
+            background-color: theme('colors.surface-container-lowest');
+            border: 1px solid theme('colors.surface-container-highest');
+            font-family: monospace;
+        }
+        .glow-hover:hover {
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+        }
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: theme('colors.surface-container-highest'); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: theme('colors.outline'); }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex font-body-md text-body-md overflow-hidden bg-background">
+<!-- TopAppBar -->
+<header class="bg-slate-950/50 backdrop-blur-xl text-emerald-500 font-inter antialiased docked full-width top-0 border-b border-white/10 shadow-xl shadow-emerald-900/10 fixed top-0 right-0 left-0 z-50 flex items-center justify-between px-6 h-16 ml-[280px]">
+<div class="flex items-center gap-4">
+<span class="text-xl font-bold tracking-tight text-emerald-400">Orchestrator AI</span>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-all duration-200 rounded-full">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+<button class="p-2 text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-all duration-200 rounded-full">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-all duration-200 rounded-full">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+<button class="bg-primary text-on-primary px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 glow-hover transition-all">
+<span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                Deploy Agent
+            </button>
+<div class="h-8 w-8 rounded-full bg-surface-container-high border border-outline-variant overflow-hidden ml-2 flex items-center justify-center">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="close up portrait of a young professional woman with soft lighting and neutral background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB5F9dbRSySFnVnfmT6rx21bSl3Xw8kZzIoVXPzAoM21YbkXKRjOQX08a_Mja7pjN3Et-Nra-g8CziIfVGBw-NO9Tuin67Z92De1J15sXjkdey-J9dWZs5eScfAOX715DqaHfI5jvBRC3tJMz8VhKjgWPOvptkpypnejSuF0iZ8JcUdMbSr4I1lEwmPDYq_F8_1gbJpzR2Y1LQfZ4nqbmNmsxES4G9UgLj1uKuL01nLyedyY9PxIVVQn26iYj4HhQkKC5UApWLxWgk"/>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<nav class="bg-slate-950 border-r border-white/10 text-emerald-500 font-inter text-sm font-medium fixed left-0 top-0 h-screen w-[280px] divide-y divide-white/5 shadow-2xl shadow-black flex flex-col pt-20 pb-6 z-40">
+<!-- Header Info -->
+<div class="px-6 pb-6">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-lg bg-surface-container-highest border border-outline-variant flex items-center justify-center relative">
+<span class="material-symbols-outlined text-primary">memory</span>
+<div class="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full animate-pulse border-2 border-slate-950"></div>
+</div>
+<div>
+<h2 class="text-lg font-black text-white">Core Engine</h2>
+<p class="text-xs text-slate-400">v2.4.0-stable</p>
+</div>
+</div>
+<button class="w-full bg-surface-container hover:bg-surface-container-high border border-outline-variant text-on-surface py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-all">
+<span class="material-symbols-outlined text-[18px]">add</span>
+                New Workflow
+            </button>
+</div>
+<!-- Main Navigation -->
+<div class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 border-r-2 border-emerald-500 click:scale-95 duration-150" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="dashboard">dashboard</span>
+                Dashboard
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all click:scale-95 duration-150" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="account_tree">account_tree</span>
+                Workflows
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all click:scale-95 duration-150" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="smart_toy">smart_toy</span>
+                Agent Library
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all click:scale-95 duration-150" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="terminal">terminal</span>
+                Logs
+            </a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all click:scale-95 duration-150" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="shield">shield</span>
+                Security
+            </a>
+</div>
+<!-- Footer Navigation -->
+<div class="pt-4 px-3 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all text-xs" href="#">
+<span class="material-symbols-outlined text-[16px]" data-icon="help">help</span>
+                Documentation
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-200 hover:glow-emerald-400/20 transition-all text-xs" href="#">
+<span class="material-symbols-outlined text-[16px]" data-icon="contact_support">contact_support</span>
+                Support
+            </a>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-[280px] mt-16 p-lg h-[calc(100vh-64px)] overflow-y-auto bg-surface relative">
+<!-- Background decorative blur -->
+<div class="absolute top-0 right-0 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+<div class="max-w-[1600px] mx-auto space-y-lg">
+<!-- Top Section: 3 Columns Grid -->
+<div class="grid grid-cols-12 gap-lg h-[480px]">
+<!-- Left Column: Task Config -->
+<div class="col-span-12 lg:col-span-3 glass-card flex flex-col p-md h-full">
+<div class="flex items-center gap-2 mb-md border-b border-white/5 pb-sm">
+<span class="material-symbols-outlined text-primary text-[20px]">assignment</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">任务配置</h3>
+</div>
+<div class="space-y-4 flex-1 flex flex-col">
+<div>
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2">项目 ID</label>
+<div class="relative">
+<span class="absolute inset-y-0 left-0 flex items-center pl-3">
+<span class="material-symbols-outlined text-outline text-[18px]">folder</span>
+</span>
+<input class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg py-2 pl-10 pr-3 text-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none font-code-sm" type="text" value="PRJ-8842-OMEGA"/>
+</div>
+</div>
+<div class="flex-1 flex flex-col">
+<label class="block font-label-caps text-label-caps text-on-surface-variant mb-2 flex justify-between">
+<span>原始需求</span>
+<span class="text-outline text-[10px]">Markdown</span>
+</label>
+<textarea class="w-full flex-1 bg-surface-container-lowest border border-outline-variant rounded-lg p-3 text-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none resize-none font-body-md" placeholder="输入任务描述...">分析最新的量子计算论文，提取关键发现，并生成一个针对普通技术人员的简短总结报告。重点关注纠错率的提升。
+                            </textarea>
+</div>
+<button class="w-full bg-primary/10 border border-primary/30 text-primary hover:bg-primary hover:text-on-primary py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors font-medium">
+<span class="material-symbols-outlined text-[18px]">play_arrow</span>
+                            初始化编排
+                        </button>
+</div>
+</div>
+<!-- Center Column: Model Settings -->
+<div class="col-span-12 lg:col-span-4 glass-card flex flex-col p-md h-full">
+<div class="flex items-center justify-between mb-md border-b border-white/5 pb-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary text-[20px]">tune</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">代理模型配置</h3>
+</div>
+<span class="bg-surface-container-high px-2 py-1 rounded text-xs font-code-sm text-outline">3 Agents</span>
+</div>
+<div class="space-y-sm overflow-y-auto flex-1 pr-2">
+<!-- Agent 1 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-3">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-secondary text-[18px]">search</span>
+<span class="font-medium text-sm">ResearchAgent</span>
+<span class="ml-auto flex h-2 w-2 relative">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+</span>
+</div>
+<div class="space-y-3">
+<div>
+<select class="w-full bg-surface border border-outline-variant rounded p-1.5 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none">
+<option>GPT-4o</option>
+<option selected="">Claude 3.5 Sonnet</option>
+<option>Gemini 1.5 Pro</option>
+</select>
+</div>
+<div>
+<div class="flex justify-between text-[10px] text-on-surface-variant mb-1">
+<span>Temperature</span>
+<span class="font-code-sm">0.2</span>
+</div>
+<input class="w-full h-1 bg-surface-container-highest rounded-lg appearance-none cursor-pointer accent-primary" max="1" min="0" step="0.1" type="range" value="0.2"/>
+</div>
+</div>
+</div>
+<!-- Agent 2 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-3">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-tertiary text-[18px]">architecture</span>
+<span class="font-medium text-sm">PlannerAgent</span>
+<span class="ml-auto w-2 h-2 rounded-full bg-outline"></span>
+</div>
+<div class="space-y-3">
+<div>
+<select class="w-full bg-surface border border-outline-variant rounded p-1.5 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none">
+<option selected="">GPT-4o</option>
+<option>Claude 3.5 Sonnet</option>
+<option>Gemini 1.5 Pro</option>
+</select>
+</div>
+<div>
+<div class="flex justify-between text-[10px] text-on-surface-variant mb-1">
+<span>Temperature</span>
+<span class="font-code-sm">0.7</span>
+</div>
+<input class="w-full h-1 bg-surface-container-highest rounded-lg appearance-none cursor-pointer accent-primary" max="1" min="0" step="0.1" type="range" value="0.7"/>
+</div>
+</div>
+</div>
+<!-- Agent 3 -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-3">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-secondary-fixed text-[18px]">find_in_page</span>
+<span class="font-medium text-sm">ExtractorAgent</span>
+<span class="ml-auto w-2 h-2 rounded-full bg-outline"></span>
+</div>
+<div class="space-y-3">
+<div>
+<select class="w-full bg-surface border border-outline-variant rounded p-1.5 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary focus:outline-none">
+<option>GPT-4o</option>
+<option>Claude 3.5 Sonnet</option>
+<option selected="">Gemini 1.5 Pro</option>
+</select>
+</div>
+<div>
+<div class="flex justify-between text-[10px] text-on-surface-variant mb-1">
+<span>Temperature</span>
+<span class="font-code-sm">0.1</span>
+</div>
+<input class="w-full h-1 bg-surface-container-highest rounded-lg appearance-none cursor-pointer accent-primary" max="1" min="0" step="0.1" type="range" value="0.1"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Agent Status / JSON Inspector -->
+<div class="col-span-12 lg:col-span-5 glass-card flex flex-col p-0 h-full overflow-hidden">
+<div class="p-md border-b border-white/5 bg-surface-container/50 flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[20px]">data_object</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">实时状态: ResearchAgent</h3>
+</div>
+<div class="flex gap-2">
+<button class="text-outline hover:text-on-surface p-1 rounded transition-colors" title="Copy JSON">
+<span class="material-symbols-outlined text-[18px]">content_copy</span>
+</button>
+<button class="text-outline hover:text-on-surface p-1 rounded transition-colors" title="Expand">
+<span class="material-symbols-outlined text-[18px]">open_in_full</span>
+</button>
+</div>
+</div>
+<div class="flex-1 code-block overflow-auto p-4 m-0 border-0">
+<pre class="font-code-sm text-code-sm leading-relaxed text-sm"><span class="text-secondary">{</span>
+  <span class="text-primary-fixed">"agent_id"</span>: <span class="text-emerald-300">"res_agt_098x"</span>,
+  <span class="text-primary-fixed">"status"</span>: <span class="text-emerald-300">"processing"</span>,
+  <span class="text-primary-fixed">"current_task"</span>: <span class="text-emerald-300">"fetch_arxiv_papers"</span>,
+  <span class="text-primary-fixed">"query_params"</span>: <span class="text-secondary">{</span>
+    <span class="text-primary-fixed">"keywords"</span>: <span class="text-emerald-200">[</span>
+      <span class="text-emerald-300">"quantum computing"</span>,
+      <span class="text-emerald-300">"error correction"</span>
+    <span class="text-emerald-200">]</span>,
+    <span class="text-primary-fixed">"date_range"</span>: <span class="text-emerald-300">"last_30_days"</span>
+  <span class="text-secondary">}</span>,
+  <span class="text-primary-fixed">"memory_usage"</span>: <span class="text-tertiary">"248 MB"</span>,
+  <span class="text-primary-fixed">"logs"</span>: <span class="text-emerald-200">[</span>
+    <span class="text-outline">"2023-10-27T10:14:02Z - Initiating search API call..."</span>,
+    <span class="text-outline">"2023-10-27T10:14:05Z - Retrieved 12 candidate papers."</span>,
+    <span class="text-outline">"2023-10-27T10:14:06Z - Filtering by relevance score &gt; 0.8..."</span>
+  <span class="text-emerald-200">]</span>,
+  <span class="text-primary-fixed">"confidence_score"</span>: <span class="text-tertiary">0.92</span>
+<span class="text-secondary">}</span></pre>
+</div>
+</div>
+</div>
+<!-- Bottom Section: Results / Logs -->
+<div class="glass-card flex flex-col p-md h-[400px]">
+<div class="flex items-center justify-between mb-md border-b border-white/5 pb-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface text-[20px]">view_list</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">执行输出</h3>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 text-xs">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="text-on-surface-variant">系统正常运行</span>
+</div>
+<button class="text-xs text-outline hover:text-on-surface transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">filter_list</span>
+                            过滤
+                        </button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto space-y-2 pr-2 font-code-sm text-xs">
+<div class="flex gap-4 p-2 hover:bg-surface-container-highest rounded border border-transparent hover:border-outline-variant transition-colors group">
+<span class="text-outline w-24 flex-shrink-0">10:12:45.001</span>
+<span class="text-primary w-16 flex-shrink-0">[INFO]</span>
+<span class="text-on-surface flex-1">Orchestrator initialized. Project ID: PRJ-8842-OMEGA loaded.</span>
+</div>
+<div class="flex gap-4 p-2 hover:bg-surface-container-highest rounded border border-transparent hover:border-outline-variant transition-colors group">
+<span class="text-outline w-24 flex-shrink-0">10:12:46.120</span>
+<span class="text-tertiary w-16 flex-shrink-0">[PLAN]</span>
+<span class="text-on-surface flex-1">PlannerAgent generated execution graph. 3 parallel tasks created.</span>
+</div>
+<div class="flex gap-4 p-2 bg-surface-container-highest/50 rounded border border-outline-variant/30 group">
+<span class="text-outline w-24 flex-shrink-0">10:13:05.442</span>
+<span class="text-secondary w-16 flex-shrink-0">[AGENT]</span>
+<span class="text-on-surface flex-1">ResearchAgent context window expanded. Model: Claude 3.5 Sonnet active.</span>
+</div>
+<div class="flex gap-4 p-2 hover:bg-surface-container-highest rounded border border-transparent hover:border-outline-variant transition-colors group">
+<span class="text-outline w-24 flex-shrink-0">10:14:06.889</span>
+<span class="text-primary w-16 flex-shrink-0">[INFO]</span>
+<span class="text-on-surface flex-1">Filtered 4 highly relevant papers on Quantum Error Correction.</span>
+</div>
+<div class="flex gap-4 p-2 bg-surface-container-highest/50 rounded border border-outline-variant/30 group">
+<span class="text-outline w-24 flex-shrink-0">10:14:10.000</span>
+<span class="text-secondary-fixed w-16 flex-shrink-0">[EXTRACT]</span>
+<span class="text-on-surface flex-1 text-slate-300">ExtractorAgent beginning chunking and embedding process for paper ID arXiv:2308.1234.</span>
+</div>
+<div class="flex gap-4 p-2 hover:bg-surface-container-highest rounded border border-transparent hover:border-outline-variant transition-colors group">
+<span class="text-outline w-24 flex-shrink-0">10:14:15.221</span>
+<span class="text-error w-16 flex-shrink-0">[WARN]</span>
+<span class="text-on-surface flex-1 text-error/80">Rate limit approaching for secondary API. Adjusting request pacing automatically.</span>
+</div>
+<!-- Typing indicator for live log -->
+<div class="flex gap-4 p-2 items-center">
+<span class="text-outline w-24 flex-shrink-0 font-code-sm">10:14:18...</span>
+<span class="flex gap-1 items-center">
+<span class="w-1.5 h-1.5 bg-primary rounded-full animate-bounce"></span>
+<span class="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style="animation-delay: 0.2s"></span>
+<span class="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style="animation-delay: 0.4s"></span>
+</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

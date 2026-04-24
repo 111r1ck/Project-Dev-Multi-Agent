@@ -1,4 +1,5 @@
 from app.agents.reviewer_agent import build_reviewer_agent
+from app.config import settings
 from app.graph.nodes.common import (
     compact_json,
     extract_structured_response,
@@ -42,9 +43,35 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
+    review_report = structured.model_dump()
+    passed = bool(review_report.get("passed"))
+    review_rounds = int(state.get("review_rounds", 0))
+    max_review_rounds = int(state.get("max_review_rounds", settings.review_max_rounds))
+
+    if passed:
+        return {
+            **state,
+            "review_report": review_report,
+            "next_step": "finish",
+        }
+
+    next_review_rounds = review_rounds + 1
+    if next_review_rounds >= max_review_rounds:
+        errors = list(state.get("errors", []))
+        errors.append(
+            f"评审未通过，已达到最大复审轮次({max_review_rounds})，请根据review_report人工修正后再运行。"
+        )
+        return {
+            **state,
+            "review_report": review_report,
+            "review_rounds": next_review_rounds,
+            "errors": errors,
+            "next_step": "finish",
+        }
 
     return {
         **state,
-        "review_report": structured.model_dump(),
-        "next_step": "finish",
+        "review_report": review_report,
+        "review_rounds": next_review_rounds,
+        "next_step": "planner",
     }

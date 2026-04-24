@@ -16,6 +16,8 @@ class ProjectState(TypedDict, total=False):
     human_feedback_notes: list[Any]
     human_rounds: int
     max_human_rounds: int
+    review_rounds: int
+    max_review_rounds: int
     next_step: Literal[
         "supervisor",
         "requirement_analyst",

@@ -80,6 +80,7 @@ def build_graph():
         "reviewer",
         next_route,
         {
+            "planner": "planner",
             "finish": END,
         },
     )

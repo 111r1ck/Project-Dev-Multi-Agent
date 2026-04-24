@@ -2,6 +2,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from app.config import settings
+from app.services.runtime_settings import get_runtime_settings
 
 AGENT_MODEL_OVERRIDES = {
     "requirement": "requirement_llm_model",
@@ -14,9 +15,10 @@ AGENT_MODEL_OVERRIDES = {
 
 
 def _default_model_for(provider: str) -> str:
+    runtime = get_runtime_settings(reveal_secrets=True)
     defaults = {
         "openai": "gpt-5",
-        "azure_openai": settings.azure_openai_deployment or "gpt-4o",
+        "azure_openai": runtime.get("azure_openai_deployment") or "gpt-4o",
         "anthropic": "claude-3-5-sonnet-latest",
         "google": "gemini-2.0-flash",
         "google_genai": "gemini-2.0-flash",
@@ -27,13 +29,14 @@ def _default_model_for(provider: str) -> str:
 
 
 def _resolve_model(provider: str, agent_key: str | None = None) -> str:
+    runtime = get_runtime_settings(reveal_secrets=True)
     if agent_key:
         attr_name = AGENT_MODEL_OVERRIDES.get(agent_key)
         if attr_name:
-            override = getattr(settings, attr_name, "")
+            override = str(runtime.get(attr_name, "") or "")
             if override and override.strip():
                 return override.strip()
-    model = settings.llm_model.strip() if settings.llm_model else ""
+    model = str(runtime.get("llm_model", "") or "").strip()
     if model:
         return model
     return _default_model_for(provider)
@@ -44,30 +47,32 @@ def _is_dashscope_base_url(url: str) -> bool:
 
 
 def _openai_extra_body(provider: str, model: str) -> dict:
+    runtime = get_runtime_settings(reveal_secrets=True)
     extra_body: dict = {}
-    if settings.llm_enable_thinking is not None:
-        extra_body["enable_thinking"] = settings.llm_enable_thinking
+    if runtime.get("llm_enable_thinking") is not None:
+        extra_body["enable_thinking"] = runtime.get("llm_enable_thinking")
         return extra_body
 
     # DashScope Qwen models may reject tool_choice=required in thinking mode.
     # LangChain agents commonly force tool_choice when tools/structured output are enabled.
     # We disable thinking by default in this specific combination for compatibility.
-    if provider == "openai" and _is_dashscope_base_url(settings.openai_base_url):
+    if provider == "openai" and _is_dashscope_base_url(str(runtime.get("openai_base_url", ""))):
         if model.lower().startswith("qwen"):
             extra_body["enable_thinking"] = False
     return extra_body
 
 
 def get_llm(agent_key: str | None = None) -> BaseChatModel:
-    provider = settings.llm_provider.lower().strip()
+    runtime = get_runtime_settings(reveal_secrets=True)
+    provider = str(runtime.get("llm_provider", settings.llm_provider)).lower().strip()
     model = _resolve_model(provider, agent_key=agent_key)
-    temperature = settings.llm_temperature
+    temperature = float(runtime.get("llm_temperature", settings.llm_temperature))
 
     if provider == "openai":
         extra_body = _openai_extra_body(provider, model)
         return ChatOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url or None,
+            api_key=str(runtime.get("openai_api_key", "") or ""),
+            base_url=str(runtime.get("openai_base_url", "") or "") or None,
             model=model,
             temperature=temperature,
             extra_body=extra_body or None,
@@ -75,18 +80,20 @@ def get_llm(agent_key: str | None = None) -> BaseChatModel:
 
     if provider == "azure_openai":
         return AzureChatOpenAI(
-            api_key=settings.azure_openai_api_key or settings.openai_api_key,
-            azure_endpoint=settings.azure_openai_endpoint,
-            azure_deployment=settings.azure_openai_deployment or model,
-            api_version=settings.azure_openai_api_version,
+            api_key=str(runtime.get("azure_openai_api_key", "") or "")
+            or str(runtime.get("openai_api_key", "") or ""),
+            azure_endpoint=str(runtime.get("azure_openai_endpoint", "") or ""),
+            azure_deployment=str(runtime.get("azure_openai_deployment", "") or "") or model,
+            api_version=str(runtime.get("azure_openai_api_version", "") or settings.azure_openai_api_version),
             temperature=temperature,
         )
 
     if provider == "openrouter":
         extra_body = _openai_extra_body(provider, model)
         return ChatOpenAI(
-            api_key=settings.openrouter_api_key or settings.openai_api_key,
-            base_url=settings.openrouter_base_url,
+            api_key=str(runtime.get("openrouter_api_key", "") or "")
+            or str(runtime.get("openai_api_key", "") or ""),
+            base_url=str(runtime.get("openrouter_base_url", "") or settings.openrouter_base_url),
             model=model,
             temperature=temperature,
             extra_body=extra_body or None,
@@ -100,7 +107,7 @@ def get_llm(agent_key: str | None = None) -> BaseChatModel:
                 "Missing dependency for Google GenAI. Install `langchain-google-genai`."
             ) from exc
         return ChatGoogleGenerativeAI(
-            google_api_key=settings.google_api_key,
+            google_api_key=str(runtime.get("google_api_key", "") or ""),
             model=model,
             temperature=temperature,
         )
@@ -113,7 +120,7 @@ def get_llm(agent_key: str | None = None) -> BaseChatModel:
                 "Missing dependency for Anthropic. Install `langchain-anthropic`."
             ) from exc
         return ChatAnthropic(
-            api_key=settings.anthropic_api_key,
+            api_key=str(runtime.get("anthropic_api_key", "") or ""),
             model=model,
             temperature=temperature,
         )
@@ -126,7 +133,7 @@ def get_llm(agent_key: str | None = None) -> BaseChatModel:
                 "Missing dependency for Ollama. Install `langchain-ollama`."
             ) from exc
         return ChatOllama(
-            base_url=settings.ollama_base_url,
+            base_url=str(runtime.get("ollama_base_url", "") or settings.ollama_base_url),
             model=model,
             temperature=temperature,
         )

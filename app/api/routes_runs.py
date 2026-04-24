@@ -3,10 +3,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.dependencies import get_compiled_graph
 from app.services.report_renderer import render_result
 from app.config import settings
+from app.storage.checkpoints import purge_thread_checkpoints
 from langgraph.types import Command
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -82,7 +84,8 @@ async def run_project_analysis(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": req.project_id}}
-    result = compiled_graph.invoke(
+    result = await run_in_threadpool(
+        compiled_graph.invoke,
         {
             "project_id": req.project_id,
             "thread_id": req.project_id,
@@ -92,9 +95,11 @@ async def run_project_analysis(
             "need_human": False,
             "human_rounds": 0,
             "max_human_rounds": settings.human_gate_max_rounds,
+            "review_rounds": 0,
+            "max_review_rounds": settings.review_max_rounds,
             "next_step": "requirement_analyst",
         },
-        config=config,
+        config,
     )
 
     return _format_run_response(req.project_id, result)
@@ -107,7 +112,11 @@ async def resume_project_analysis(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": project_id}}
-    result = compiled_graph.invoke(Command(resume=req.human_feedback), config=config)
+    result = await run_in_threadpool(
+        compiled_graph.invoke,
+        Command(resume=req.human_feedback),
+        config,
+    )
     return _format_run_response(project_id, result)
 
 
@@ -117,7 +126,7 @@ async def get_project_run_state(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": project_id}}
-    snapshot = compiled_graph.get_state(config)
+    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
     state = _serialize_snapshot(snapshot)
     return {
         "project_id": project_id,
@@ -136,9 +145,21 @@ async def get_project_run_history(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": project_id}}
-    snapshots = list(compiled_graph.get_state_history(config, limit=limit))
+    snapshots = await run_in_threadpool(
+        lambda: list(compiled_graph.get_state_history(config, limit=limit))
+    )
     return {
         "project_id": project_id,
         "count": len(snapshots),
         "history": [_serialize_snapshot(snapshot) for snapshot in snapshots],
+    }
+
+
+@router.delete("/{project_id}/checkpoints")
+async def delete_project_checkpoints(project_id: str):
+    result = await run_in_threadpool(purge_thread_checkpoints, project_id)
+    return {
+        "project_id": project_id,
+        "status": "deleted",
+        **result,
     }

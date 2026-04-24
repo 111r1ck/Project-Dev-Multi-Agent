@@ -5,157 +5,371 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Multi-Agent Runner</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 
     :root {
-      --bg: #f6f3ee;
-      --panel: #fffdf7;
-      --ink: #1b1b1f;
-      --sub: #5d5a53;
-      --line: #d8d2c8;
-      --accent: #0f766e;
-      --accent-2: #f97316;
-      --ok: #166534;
-      --warn: #b45309;
+      --bg: #020617;
+      --bg-soft: #081228;
+      --surface: rgba(19, 27, 46, 0.74);
+      --surface-strong: rgba(12, 19, 33, 0.88);
+      --surface-code: #0b0f1a;
+      --line: rgba(134, 148, 138, 0.22);
+      --line-strong: rgba(134, 148, 138, 0.4);
+      --text: #dae2fd;
+      --muted: #9eb0be;
+      --primary: #10b981;
+      --primary-soft: rgba(16, 185, 129, 0.16);
+      --warn: #f59e0b;
+      --danger: #fb7185;
+      --ok: #22c55e;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --radius-lg: 18px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
     }
 
-    * { box-sizing: border-box; }
-    body {
+    * { box-sizing: border-box; min-width: 0; }
+
+    html, body {
       margin: 0;
-      font-family: "Space Grotesk", sans-serif;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at 100% 0%, #ffe6c7 0, transparent 35%),
-        radial-gradient(circle at 0% 100%, #c4f1ec 0, transparent 42%),
-        var(--bg);
-      min-height: 100vh;
+      width: 100%;
+      max-width: 100%;
       overflow-x: hidden;
     }
 
-    .wrap {
-      max-width: 1440px;
-      margin: 24px auto 48px;
-      padding: 0 20px;
+    body {
+      font-family: "Inter", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 85% 2%, rgba(16, 185, 129, 0.12) 0, transparent 30%),
+        radial-gradient(circle at 10% 92%, rgba(59, 130, 246, 0.1) 0, transparent 34%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-soft) 100%);
+      min-height: 100vh;
+    }
+
+    .layout {
       display: grid;
-      grid-template-columns: 1fr;
+      grid-template-columns: 260px 1fr;
+      min-height: 100vh;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: clip;
+    }
+
+    .sidebar {
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(2, 6, 23, 0.78);
+      backdrop-filter: blur(12px);
+      padding: 20px 14px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
       gap: 14px;
     }
 
-    .hero {
-      background: linear-gradient(135deg, #1f2937, #0f766e);
-      color: #f7fafc;
-      border-radius: 16px;
-      padding: 18px 18px;
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(16, 185, 129, 0.08);
     }
 
-    .hero h1 {
-      margin: 0 0 6px;
-      font-size: 24px;
-      letter-spacing: 0.2px;
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--primary);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.7);
+      animation: pulse 1.6s infinite;
     }
-    .hero p { margin: 0; opacity: .9; }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 14px;
+      font-family: "Space Grotesk", sans-serif;
+      letter-spacing: 0.03em;
+      font-weight: 700;
+    }
+
+    .nav-chip {
+      font-size: 12px;
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 6px 10px;
+      display: inline-flex;
+      width: fit-content;
+      font-family: "Space Grotesk", sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .nav-section {
+      display: grid;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .nav-item {
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 10px;
+      font-size: 13px;
+      color: #b8c6d2;
+      background: rgba(255, 255, 255, 0.02);
+      cursor: pointer;
+    }
+
+    .nav-item.active {
+      border-color: rgba(16, 185, 129, 0.35);
+      background: rgba(16, 185, 129, 0.12);
+      color: #d9fceb;
+    }
+
+    .main {
+      padding: 18px 20px 28px;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    .topbar {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(130deg, rgba(16, 185, 129, 0.2), rgba(8, 18, 40, 0.82));
+      box-shadow: var(--shadow);
+      padding: 16px 18px;
+      margin-bottom: 14px;
+    }
+
+    .topbar h2 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      font-family: "Inter", sans-serif;
+    }
+
+    .topbar p {
+      margin: 6px 0 0;
+      color: #c4d2de;
+      font-size: 14px;
+    }
 
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      grid-template-columns: repeat(12, minmax(0, 1fr));
       gap: 14px;
+      width: 100%;
+      max-width: 100%;
     }
 
     .card {
-      background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
       padding: 14px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.04);
       min-width: 0;
-    }
-    .card h2 {
-      margin: 0 0 10px;
-      font-size: 17px;
+      overflow: hidden;
     }
 
+    .card h3 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      font-weight: 700;
+      font-family: "Inter", sans-serif;
+    }
+
+    .card h3 .idx {
+      color: #8fe6c5;
+      margin-right: 6px;
+      font-family: "Space Grotesk", sans-serif;
+    }
+
+    .panel-run { grid-column: span 4; }
+    .panel-state { grid-column: span 4; }
+    .panel-resume { grid-column: span 4; }
+    .panel-result { grid-column: 1 / -1; }
+
     label {
-      font-size: 13px;
-      color: var(--sub);
+      font-size: 12px;
+      font-family: "Space Grotesk", sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
       display: block;
       margin-bottom: 6px;
     }
 
-    input, textarea {
+    input, textarea, select {
       width: 100%;
+      border-radius: var(--radius-sm);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
+      background: var(--surface-strong);
+      color: var(--text);
       font: inherit;
-      background: #fff;
+      padding: 10px 11px;
+      outline: none;
+      max-width: 100%;
     }
-    textarea { min-height: 120px; resize: vertical; }
 
-    .row { display: grid; gap: 10px; margin-bottom: 10px; }
-    .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    input:focus, textarea:focus, select:focus {
+      border-color: rgba(16, 185, 129, 0.6);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.17);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .row {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
 
     button {
-      border: 0;
-      border-radius: 10px;
-      padding: 10px 12px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 9px 14px;
       font: inherit;
-      font-weight: 600;
+      font-size: 14px;
+      font-weight: 700;
+      color: #032719;
+      background: var(--primary);
       cursor: pointer;
-      color: #fff;
-      background: var(--accent);
-      transition: transform .12s ease, opacity .2s ease;
+      transition: all .16s ease;
+      white-space: nowrap;
     }
-    button:hover { transform: translateY(-1px); }
-    button.secondary { background: #334155; }
-    button.warn { background: var(--accent-2); }
-    button:disabled { opacity: .55; cursor: not-allowed; }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 16px rgba(16, 185, 129, 0.35);
+    }
+
+    button.secondary {
+      background: rgba(30, 41, 59, 0.92);
+      color: #dbe8f6;
+      border-color: rgba(148, 163, 184, 0.3);
+      box-shadow: none;
+    }
+
+    button.warn {
+      background: #f59e0b;
+      color: #311f00;
+    }
+
+    button.danger {
+      background: #ef4444;
+      color: #fff5f5;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
 
     .status {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-size: 12px;
-      padding: 3px 9px;
       border-radius: 999px;
-      border: 1px solid var(--line);
-      margin-left: 6px;
+      padding: 3px 10px;
+      border: 1px solid var(--line-strong);
+      color: #d3deee;
+      margin-left: 8px;
+      vertical-align: middle;
     }
-    .status.completed { color: var(--ok); border-color: #7dd3a7; background: #f0fdf4; }
-    .status.interrupted { color: var(--warn); border-color: #fdba74; background: #fff7ed; }
+
+    .status.completed {
+      color: #94f4c8;
+      border-color: rgba(34, 197, 94, 0.6);
+      background: rgba(34, 197, 94, 0.15);
+    }
+
+    .status.interrupted {
+      color: #ffd08a;
+      border-color: rgba(245, 158, 11, 0.66);
+      background: rgba(245, 158, 11, 0.16);
+    }
+
+    .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #64748b;
+      box-shadow: 0 0 8px rgba(100, 116, 139, 0.8);
+    }
+
+    .status.completed::before {
+      background: var(--ok);
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.8);
+    }
+
+    .status.interrupted::before {
+      background: var(--warn);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);
+    }
 
     pre {
-      background: #0f172a;
-      color: #e2e8f0;
-      border-radius: 10px;
+      background: var(--surface-code);
+      color: #dbe9f8;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 12px;
       padding: 12px;
-      font-size: 12px;
-      line-height: 1.45;
+      margin: 10px 0 0;
+      font: 500 12px/1.5 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
       max-height: 290px;
       overflow: auto;
+      width: 100%;
       max-width: 100%;
       white-space: pre-wrap;
-      overflow-wrap: anywhere;
       word-break: break-word;
-      margin: 10px 0 0;
+      overflow-wrap: anywhere;
     }
 
-    details {
-      margin-top: 10px;
-    }
+    details { margin-top: 10px; }
 
     summary {
       cursor: pointer;
-      color: var(--sub);
-      font-size: 13px;
+      color: #93a8ba;
+      font-size: 12px;
+      font-family: "Space Grotesk", sans-serif;
+      letter-spacing: .05em;
+      text-transform: uppercase;
       user-select: none;
     }
 
     .kv-wrap {
       margin: 8px 0 10px;
+      border: 1px dashed rgba(148, 163, 184, 0.35);
+      border-radius: 12px;
+      padding: 8px;
       max-height: 240px;
       overflow: auto;
-      border: 1px dashed var(--line);
-      border-radius: 10px;
-      padding: 8px;
-      background: #fff;
+      background: rgba(12, 19, 33, 0.65);
+      width: 100%;
+      max-width: 100%;
     }
 
     .kv-row {
@@ -167,92 +381,412 @@
 
     .kv-key {
       font-size: 12px;
-      color: var(--sub);
+      color: #b7c5d2;
       line-height: 1.35;
     }
 
     .hint {
       font-size: 12px;
-      color: var(--sub);
-      margin-top: 6px;
+      color: #9fb0c0;
+      line-height: 1.45;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .view-pane {
+      width: 100%;
+    }
+
+    .agent-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 14px;
+      width: 100%;
+    }
+
+    .agent-card {
+      grid-column: span 6;
+    }
+
+    .agent-card.full {
+      grid-column: 1 / -1;
+    }
+
+    .agent-item {
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(12, 19, 33, 0.7);
+      margin-bottom: 10px;
+    }
+
+    .agent-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: #d5f6e8;
+      margin-bottom: 4px;
+    }
+
+    .agent-desc {
+      font-size: 12px;
+      color: #a8b7c7;
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .agent-top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .provider-group {
+      border: 1px dashed rgba(148, 163, 184, 0.35);
+      border-radius: 12px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background: rgba(12, 19, 33, 0.5);
+    }
+
+    .provider-title {
+      font-size: 12px;
+      font-family: "Space Grotesk", sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #a8f2d2;
+      margin: 0 0 8px;
+    }
+
+    .result-sections {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .result-sections.hidden {
+      display: none;
+    }
+
+    .result-block {
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 12px;
+      background: rgba(12, 19, 33, 0.7);
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .result-block-title {
+      font-size: 12px;
+      font-family: "Space Grotesk", sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #a8f2d2;
+      margin: 0 0 6px;
+    }
+
+    .result-block pre {
+      margin-top: 0;
+      max-height: 220px;
+    }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.35);
+      border-radius: 999px;
+    }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      60% { transform: scale(1.35); opacity: 0.35; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    @media (max-width: 1200px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+      }
+      .main { padding-top: 14px; }
+      .nav-section { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    }
+
+    @media (max-width: 960px) {
+      .panel-run, .panel-state, .panel-resume { grid-column: 1 / -1; }
+      .topbar h2 { font-size: 23px; }
+      .agent-card { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 640px) {
+      .main { padding: 12px; }
+      .topbar { padding: 13px; }
+      .card { padding: 12px; }
+      button { width: 100%; justify-content: center; }
+      .btns { display: grid; grid-template-columns: 1fr; }
+      .result-sections { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <section class="hero">
-      <h1>LangGraph Multi-Agent Console</h1>
-      <p>运行工作流、查看 checkpoint、处理中断并继续执行。</p>
-    </section>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>LangGraph Orchestrator</h1>
+      </div>
+      <span class="nav-chip">control plane</span>
+      <div class="nav-section">
+        <div id="navWorkflow" class="nav-item active">工作台 / Runs</div>
+        <div id="navAgentEditor" class="nav-item">编辑 Agent</div>
+        <div class="nav-item">State / History</div>
+        <div class="nav-item">Human Gate</div>
+        <div class="nav-item">Checkpoints</div>
+      </div>
+    </aside>
 
-    <section class="grid">
-      <article class="card">
-        <h2>1) 运行任务</h2>
-        <div class="row">
+    <main class="main">
+      <section class="topbar">
+        <h2>LangGraph Multi-Agent Console</h2>
+        <p>运行工作流、查看 checkpoint、处理中断并继续执行。</p>
+      </section>
+
+      <section id="workflowView" class="view-pane">
+      <section class="grid">
+        <article class="card panel-run">
+          <h3><span class="idx">01</span>运行任务</h3>
           <div>
             <label>Project ID</label>
-            <input id="projectId" value="mall-001" placeholder="mall-001" />
+            <div class="btns" style="margin-top: 0;">
+              <input id="projectId" placeholder="例如: edutech-ai-001" />
+              <button id="genProjectIdBtn" class="secondary" type="button">生成ID</button>
+            </div>
+          </div>
+          <div style="margin-top: 10px;">
+            <label>Raw Requirement</label>
+            <textarea id="rawRequirement" placeholder="输入你的项目需求..."></textarea>
+          </div>
+          <div class="btns">
+            <button id="runBtn">执行 /runs</button>
+          </div>
+        </article>
+
+        <article class="card panel-state">
+          <h3><span class="idx">02</span>状态与历史</h3>
+          <div class="btns">
+            <button id="stateBtn" class="secondary">刷新 state</button>
+            <button id="historyBtn" class="secondary">刷新 history</button>
+            <button id="hydrateResultBtn" class="secondary">从 state 恢复结果显示</button>
+            <button id="purgeBtn" class="danger">清理该项目ID checkpoint</button>
+          </div>
+          <pre id="stateSummaryPre">{}</pre>
+          <details>
+            <summary>展开 state 完整 JSON</summary>
+            <pre id="statePre">{}</pre>
+          </details>
+          <pre id="historySummaryPre">{}</pre>
+          <details>
+            <summary>展开 history 完整 JSON</summary>
+            <pre id="historyPre">{}</pre>
+          </details>
+        </article>
+
+        <article class="card panel-resume">
+          <h3><span class="idx">03</span>人工补充并恢复</h3>
+          <div class="btns">
+            <button id="loadMissingBtn" class="secondary">从结果载入缺失字段</button>
+          </div>
+          <div id="missingFieldsWrap" class="kv-wrap">
+            <div class="hint">当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。</div>
           </div>
           <div>
-            <label>Raw Requirement</label>
-            <textarea id="rawRequirement">开发一个社区电商商城，支持商品浏览、购物车、下单、支付、订单管理和多小区切换。</textarea>
+            <label>Human Feedback (JSON，可选手动编辑)</label>
+            <textarea id="feedbackText" placeholder='可手动输入 JSON，例如：{"字段A":"补充说明"}'>{}</textarea>
           </div>
-        </div>
-        <div class="btns">
-          <button id="runBtn">执行 /runs</button>
-        </div>
-      </article>
+          <div class="btns">
+            <button id="resumeBtn" class="warn">执行 /resume</button>
+          </div>
+        </article>
 
-      <article class="card">
-        <h2>2) 状态与历史</h2>
-        <div class="btns">
-          <button id="stateBtn" class="secondary">刷新 state</button>
-          <button id="historyBtn" class="secondary">刷新 history</button>
-        </div>
-        <pre id="stateSummaryPre">{}</pre>
-        <details>
-          <summary>展开 state 完整 JSON</summary>
-          <pre id="statePre">{}</pre>
-        </details>
-        <pre id="historySummaryPre">{}</pre>
-        <details>
-          <summary>展开 history 完整 JSON</summary>
-          <pre id="historyPre">{}</pre>
-        </details>
-      </article>
+        <section class="card panel-result">
+          <h3>结果 <span id="statusTag" class="status"></span></h3>
+          <pre id="resultSummaryPre">{}</pre>
+          <div id="completedSections" class="result-sections hidden"></div>
+          <details>
+            <summary>展开结果完整 JSON</summary>
+            <pre id="resultPre">{}</pre>
+          </details>
+        </section>
+      </section>
+      </section>
 
-      <article class="card">
-        <h2>3) 人工补充并恢复</h2>
-        <div class="btns">
-          <button id="loadMissingBtn" class="secondary">从结果载入缺失字段</button>
-        </div>
-        <div id="missingFieldsWrap" class="kv-wrap">
-          <div class="hint">当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。</div>
-        </div>
-        <div>
-          <label>Human Feedback (JSON，可选手动编辑)</label>
-          <textarea id="feedbackText">{
-  "支付渠道": "MVP只做微信支付，退款原路退回",
-  "小区切换规则": "手动选择优先，不支持跨小区混合下单",
-  "RBAC": "用户/商家/管理员三角色",
-  "部署与监控": "云部署，日志+监控标准化",
-  "库存扣减策略": "下单预扣减，超时回滚"
-}</textarea>
-        </div>
-        <div class="btns">
-          <button id="resumeBtn" class="warn">执行 /resume</button>
-        </div>
-      </article>
-    </section>
+      <section id="agentEditorView" class="view-pane hidden">
+        <section class="agent-grid">
+          <article class="card agent-card">
+            <h3><span class="idx">01</span>运行时模型与提供商</h3>
+            <div class="agent-top-actions">
+              <button id="agentLoadBtn" class="secondary" type="button">刷新配置</button>
+              <button id="agentSaveBtn" type="button">保存配置</button>
+              <button id="persistEnvBtn" class="warn" type="button">保存到 .env</button>
+              <button id="secretToggleBtn" class="secondary" type="button">显示密钥</button>
+            </div>
+            <div class="row">
+              <div>
+                <label>LLM Provider</label>
+                <select id="cfgProvider">
+                  <option value="openai">openai</option>
+                  <option value="azure_openai">azure_openai</option>
+                  <option value="openrouter">openrouter</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="google">google</option>
+                  <option value="ollama">ollama</option>
+                </select>
+              </div>
+              <div>
+                <label>全局默认模型（所有Agent兜底）</label>
+                <input id="cfgGlobalModel" list="modelOptions" placeholder="例如: gpt-5 / qwen3.6-plus" />
+              </div>
+              <div>
+                <label>Temperature</label>
+                <input id="cfgTemp" type="number" step="0.1" min="0" max="2" />
+              </div>
+            </div>
+          </article>
 
-    <section class="card">
-      <h2>结果 <span id="statusTag" class="status"></span></h2>
-      <pre id="resultSummaryPre">{}</pre>
-      <details>
-        <summary>展开结果完整 JSON</summary>
-        <pre id="resultPre">{}</pre>
-      </details>
-    </section>
+          <article class="card agent-card">
+            <h3><span class="idx">02</span>API Key 与连接</h3>
+            <div class="provider-group" data-provider-group="openai">
+              <div class="provider-title">OpenAI 连接</div>
+              <div class="row">
+                <div>
+                  <label>OpenAI API Key</label>
+                  <input id="cfgOpenAiKey" type="password" autocomplete="off" />
+                </div>
+                <div>
+                  <label>OpenAI Base URL</label>
+                  <input id="cfgOpenAiBase" placeholder="https://..." />
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group" data-provider-group="azure_openai">
+              <div class="provider-title">Azure OpenAI 连接</div>
+              <div class="row">
+                <div>
+                  <label>Azure API Key</label>
+                  <input id="cfgAzureKey" type="password" autocomplete="off" />
+                </div>
+                <div>
+                  <label>Azure Endpoint</label>
+                  <input id="cfgAzureEndpoint" placeholder="https://..." />
+                </div>
+                <div>
+                  <label>Azure Deployment</label>
+                  <input id="cfgAzureDeployment" placeholder="deployment name" />
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group" data-provider-group="openrouter">
+              <div class="provider-title">OpenRouter 连接</div>
+              <div class="row">
+                <div>
+                  <label>OpenRouter API Key</label>
+                  <input id="cfgOpenRouterKey" type="password" autocomplete="off" />
+                </div>
+                <div>
+                  <label>OpenRouter Base URL</label>
+                  <input id="cfgOpenRouterBase" placeholder="https://..." />
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group" data-provider-group="anthropic">
+              <div class="provider-title">Anthropic 连接</div>
+              <div class="row">
+                <div>
+                  <label>Anthropic API Key</label>
+                  <input id="cfgAnthropicKey" type="password" autocomplete="off" />
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group" data-provider-group="google">
+              <div class="provider-title">Google 连接</div>
+              <div class="row">
+                <div>
+                  <label>Google API Key</label>
+                  <input id="cfgGoogleKey" type="password" autocomplete="off" />
+                </div>
+              </div>
+            </div>
+
+            <div class="provider-group" data-provider-group="ollama">
+              <div class="provider-title">Ollama 连接</div>
+              <div class="row">
+                <div>
+                  <label>Ollama Base URL</label>
+                  <input id="cfgOllamaBase" placeholder="http://127.0.0.1:11434" />
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card agent-card full">
+            <h3><span class="idx">03</span>各 Agent 模型配置</h3>
+            <div class="agent-item">
+              <div class="agent-name">需求分析 Agent</div>
+              <div class="agent-desc">功能：把原始需求抽取并整理为结构化需求文档。</div>
+              <label>模型</label>
+              <input id="cfgModelRequirement" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+            <div class="agent-item">
+              <div class="agent-name">可行性分析 Agent</div>
+              <div class="agent-desc">功能：评估可行性、风险、缺失信息和MVP范围。</div>
+              <label>模型</label>
+              <input id="cfgModelFeasibility" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+            <div class="agent-item">
+              <div class="agent-name">架构设计 Agent</div>
+              <div class="agent-desc">功能：生成可落地的系统架构与模块规划。</div>
+              <label>模型</label>
+              <input id="cfgModelArchitect" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+            <div class="agent-item">
+              <div class="agent-name">任务规划 Agent</div>
+              <div class="agent-desc">功能：拆解任务、依赖和优先级。</div>
+              <label>模型</label>
+              <input id="cfgModelPlanner" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+            <div class="agent-item">
+              <div class="agent-name">提示词构建 Agent</div>
+              <div class="agent-desc">功能：为每个任务产出编码与测试提示词。</div>
+              <label>模型</label>
+              <input id="cfgModelPromptBuilder" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+            <div class="agent-item">
+              <div class="agent-name">评审 Agent</div>
+              <div class="agent-desc">功能：评审方案是否有遗漏、冲突或不可实施问题。</div>
+              <label>模型</label>
+              <input id="cfgModelReviewer" list="modelOptions" placeholder="为空则使用全局默认模型" />
+            </div>
+          </article>
+        </section>
+        <datalist id="modelOptions">
+          <option value="gpt-5"></option>
+          <option value="gpt-5-mini"></option>
+          <option value="qwen3.6-plus"></option>
+          <option value="claude-3-5-sonnet-latest"></option>
+          <option value="gemini-2.0-flash"></option>
+        </datalist>
+      </section>
+    </main>
   </div>
 
   <script>
@@ -271,16 +805,83 @@
       const historyPre = $("historyPre");
       const historySummaryPre = $("historySummaryPre");
       const statusTag = $("statusTag");
+      const completedSections = $("completedSections");
+      const workflowView = $("workflowView");
+      const agentEditorView = $("agentEditorView");
+      const navWorkflow = $("navWorkflow");
+      const navAgentEditor = $("navAgentEditor");
 
       const runBtn = $("runBtn");
       const stateBtn = $("stateBtn");
       const historyBtn = $("historyBtn");
+      const hydrateResultBtn = $("hydrateResultBtn");
+      const purgeBtn = $("purgeBtn");
+      const genProjectIdBtn = $("genProjectIdBtn");
       const resumeBtn = $("resumeBtn");
       const loadMissingBtn = $("loadMissingBtn");
+      const agentLoadBtn = $("agentLoadBtn");
+      const agentSaveBtn = $("agentSaveBtn");
+      const persistEnvBtn = $("persistEnvBtn");
+      const secretToggleBtn = $("secretToggleBtn");
+
+      const cfgProvider = $("cfgProvider");
+      const cfgGlobalModel = $("cfgGlobalModel");
+      const cfgTemp = $("cfgTemp");
+
+      const cfgOpenAiKey = $("cfgOpenAiKey");
+      const cfgOpenAiBase = $("cfgOpenAiBase");
+      const cfgAzureKey = $("cfgAzureKey");
+      const cfgAzureEndpoint = $("cfgAzureEndpoint");
+      const cfgAzureDeployment = $("cfgAzureDeployment");
+      const cfgAnthropicKey = $("cfgAnthropicKey");
+      const cfgGoogleKey = $("cfgGoogleKey");
+      const cfgOpenRouterKey = $("cfgOpenRouterKey");
+      const cfgOpenRouterBase = $("cfgOpenRouterBase");
+      const cfgOllamaBase = $("cfgOllamaBase");
+
+      const cfgModelRequirement = $("cfgModelRequirement");
+      const cfgModelFeasibility = $("cfgModelFeasibility");
+      const cfgModelArchitect = $("cfgModelArchitect");
+      const cfgModelPlanner = $("cfgModelPlanner");
+      const cfgModelPromptBuilder = $("cfgModelPromptBuilder");
+      const cfgModelReviewer = $("cfgModelReviewer");
+      const providerGroups = Array.from(document.querySelectorAll("[data-provider-group]"));
+
+      const apiKeyInputs = [
+        cfgOpenAiKey,
+        cfgAzureKey,
+        cfgAnthropicKey,
+        cfgGoogleKey,
+        cfgOpenRouterKey
+      ];
+
+      let revealSecrets = false;
+      let loadedAgentSettings = {};
       let currentMissingFields = [];
 
       function pretty(v) {
         return JSON.stringify(v, null, 2);
+      }
+
+      function generateProjectId() {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        const hh = String(now.getHours()).padStart(2, "0");
+        const mi = String(now.getMinutes()).padStart(2, "0");
+        const ss = String(now.getSeconds()).padStart(2, "0");
+        const suffix = Math.random().toString(36).slice(2, 6);
+        return `proj-${yyyy}${mm}${dd}-${hh}${mi}${ss}-${suffix}`;
+      }
+
+      function getProjectIdOrError() {
+        const pid = projectId.value.trim();
+        if (!pid) {
+          setResult({ error: "请先填写 Project ID（或点击“生成ID”）" });
+          return null;
+        }
+        return pid;
       }
 
       function setLoading(v) {
@@ -288,8 +889,125 @@
         runBtn.disabled = v;
         stateBtn.disabled = v;
         historyBtn.disabled = v;
+        hydrateResultBtn.disabled = v;
+        purgeBtn.disabled = v;
+        genProjectIdBtn.disabled = v;
+        agentLoadBtn.disabled = v;
+        agentSaveBtn.disabled = v;
+        persistEnvBtn.disabled = v;
+        secretToggleBtn.disabled = v;
         resumeBtn.disabled = v;
         loadMissingBtn.disabled = v;
+      }
+
+      function switchView(viewName) {
+        if (viewName === "agents") {
+          workflowView.classList.add("hidden");
+          agentEditorView.classList.remove("hidden");
+          navWorkflow.classList.remove("active");
+          navAgentEditor.classList.add("active");
+          return;
+        }
+        workflowView.classList.remove("hidden");
+        agentEditorView.classList.add("hidden");
+        navWorkflow.classList.add("active");
+        navAgentEditor.classList.remove("active");
+      }
+
+      function setSecretInputMode(show) {
+        apiKeyInputs.forEach((input) => {
+          input.type = show ? "text" : "password";
+        });
+      }
+
+      function normalizeProviderKey(provider) {
+        const raw = String(provider || "").trim().toLowerCase();
+        if (raw === "google_genai") return "google";
+        return raw;
+      }
+
+      function updateProviderFieldsVisibility(provider) {
+        const activeProvider = normalizeProviderKey(provider);
+        providerGroups.forEach((group) => {
+          const groupProvider = String(group.getAttribute("data-provider-group") || "").toLowerCase();
+          if (groupProvider === activeProvider) {
+            group.classList.remove("hidden");
+          } else {
+            group.classList.add("hidden");
+          }
+        });
+      }
+
+      function applyAgentSettings(settingsObj) {
+        loadedAgentSettings = settingsObj || {};
+        cfgProvider.value = normalizeProviderKey(loadedAgentSettings.llm_provider || "openai");
+        cfgGlobalModel.value = loadedAgentSettings.llm_model || "";
+        cfgTemp.value = loadedAgentSettings.llm_temperature ?? 0.2;
+
+        cfgOpenAiKey.value = loadedAgentSettings.openai_api_key || "";
+        cfgOpenAiBase.value = loadedAgentSettings.openai_base_url || "";
+        cfgAzureKey.value = loadedAgentSettings.azure_openai_api_key || "";
+        cfgAzureEndpoint.value = loadedAgentSettings.azure_openai_endpoint || "";
+        cfgAzureDeployment.value = loadedAgentSettings.azure_openai_deployment || "";
+        cfgAnthropicKey.value = loadedAgentSettings.anthropic_api_key || "";
+        cfgGoogleKey.value = loadedAgentSettings.google_api_key || "";
+        cfgOpenRouterKey.value = loadedAgentSettings.openrouter_api_key || "";
+        cfgOpenRouterBase.value = loadedAgentSettings.openrouter_base_url || "";
+        cfgOllamaBase.value = loadedAgentSettings.ollama_base_url || "";
+
+        cfgModelRequirement.value = loadedAgentSettings.requirement_llm_model || "";
+        cfgModelFeasibility.value = loadedAgentSettings.feasibility_llm_model || "";
+        cfgModelArchitect.value = loadedAgentSettings.architect_llm_model || "";
+        cfgModelPlanner.value = loadedAgentSettings.planner_llm_model || "";
+        cfgModelPromptBuilder.value = loadedAgentSettings.prompt_builder_llm_model || "";
+        cfgModelReviewer.value = loadedAgentSettings.reviewer_llm_model || "";
+        updateProviderFieldsVisibility(cfgProvider.value);
+      }
+
+      async function loadAgentSettings() {
+        const data = await callApi("/agents/settings?reveal_secrets=" + (revealSecrets ? "true" : "false"));
+        applyAgentSettings(data.settings || {});
+      }
+
+      function collectAgentSettingsPayload() {
+        const payload = {
+          llm_provider: cfgProvider.value.trim(),
+          llm_model: cfgGlobalModel.value.trim(),
+          llm_temperature: Number(cfgTemp.value || 0.2),
+          requirement_llm_model: cfgModelRequirement.value.trim(),
+          feasibility_llm_model: cfgModelFeasibility.value.trim(),
+          architect_llm_model: cfgModelArchitect.value.trim(),
+          planner_llm_model: cfgModelPlanner.value.trim(),
+          prompt_builder_llm_model: cfgModelPromptBuilder.value.trim(),
+          reviewer_llm_model: cfgModelReviewer.value.trim(),
+          openai_api_key: cfgOpenAiKey.value.trim(),
+          openai_base_url: cfgOpenAiBase.value.trim(),
+          azure_openai_api_key: cfgAzureKey.value.trim(),
+          azure_openai_endpoint: cfgAzureEndpoint.value.trim(),
+          azure_openai_deployment: cfgAzureDeployment.value.trim(),
+          anthropic_api_key: cfgAnthropicKey.value.trim(),
+          google_api_key: cfgGoogleKey.value.trim(),
+          openrouter_api_key: cfgOpenRouterKey.value.trim(),
+          openrouter_base_url: cfgOpenRouterBase.value.trim(),
+          ollama_base_url: cfgOllamaBase.value.trim(),
+        };
+
+        const updates = {};
+        Object.keys(payload).forEach((key) => {
+          const nextValue = payload[key];
+          const prevValue = loadedAgentSettings[key];
+          if (String(nextValue) === String(prevValue ?? "")) {
+            return;
+          }
+          // If secrets are masked and unchanged by user, skip patching.
+          if (!revealSecrets && typeof prevValue === "string" && prevValue.includes("*")) {
+            if (typeof nextValue === "string" && nextValue === prevValue) {
+              return;
+            }
+          }
+          updates[key] = nextValue;
+        });
+        return updates;
       }
 
       function setResult(data) {
@@ -299,10 +1017,42 @@
         statusTag.textContent = status;
         statusTag.className = "status";
         if (status) statusTag.classList.add(status);
+        renderCompletedSections(data);
         if (status === "interrupted") {
           const missing = extractMissingFields(data);
           setMissingFields(missing);
         }
+      }
+
+      function renderCompletedSections(data) {
+        const isCompleted = data && data.status === "completed" && data.result;
+        if (!isCompleted) {
+          completedSections.classList.add("hidden");
+          completedSections.innerHTML = "";
+          return;
+        }
+
+        const sectionDefs = [
+          { key: "requirement_doc", label: "需求文档（requirement_doc）" },
+          { key: "feasibility_report", label: "可行性报告（feasibility_report）" },
+          { key: "architecture_plan", label: "架构方案（architecture_plan）" },
+          { key: "task_breakdown", label: "任务拆解（task_breakdown）" },
+          { key: "prompt_pack", label: "提示词包（prompt_pack）" },
+          { key: "review_report", label: "评审报告（review_report）" }
+        ];
+
+        completedSections.innerHTML = sectionDefs.map((section) => {
+          const value = Object.prototype.hasOwnProperty.call(data.result, section.key)
+            ? data.result[section.key]
+            : null;
+          return `
+            <article class="result-block">
+              <h4 class="result-block-title">${escapeHtml(section.label)}</h4>
+              <pre>${escapeHtml(pretty(value))}</pre>
+            </article>
+          `;
+        }).join("");
+        completedSections.classList.remove("hidden");
       }
 
       function extractMissingFields(data) {
@@ -391,13 +1141,23 @@
           project_id: data.project_id || null,
           status: data.status || null,
         };
+        const humanRounds = Number(
+          (data.state && data.state.human_rounds) ??
+          (data.values && data.values.human_rounds) ??
+          0
+        );
+        const currentInterruptCount = Array.isArray(data.interrupts) ? data.interrupts.length : 0;
         if (data.status === "interrupted") {
-          summary.interrupt_count = Array.isArray(data.interrupts) ? data.interrupts.length : 0;
+          summary.interrupt_count = humanRounds + 1;
+          summary.current_interrupt_count = currentInterruptCount;
+          summary.human_rounds = humanRounds;
           summary.first_interrupt = Array.isArray(data.interrupts) && data.interrupts.length > 0
             ? data.interrupts[0]
             : null;
         }
         if (data.status === "completed" && data.result) {
+          summary.interrupt_count = humanRounds;
+          summary.human_rounds = humanRounds;
           summary.review_passed = data.result.review_report ? data.result.review_report.passed : null;
           summary.task_count = Array.isArray(data.result.task_breakdown) ? data.result.task_breakdown.length : 0;
           summary.prompt_count = Array.isArray(data.result.prompt_pack) ? data.result.prompt_pack.length : 0;
@@ -450,27 +1210,132 @@
       }
 
       async function loadState() {
-        const pid = encodeURIComponent(projectId.value.trim());
+        const pidRaw = projectId.value.trim();
+        if (!pidRaw) {
+          stateSummaryPre.textContent = pretty({});
+          statePre.textContent = pretty({});
+          return;
+        }
+        const pid = encodeURIComponent(pidRaw);
         const data = await callApi("/runs/" + pid + "/state");
         stateSummaryPre.textContent = pretty(buildStateSummary(data));
         statePre.textContent = pretty(data);
       }
 
       async function loadHistory() {
-        const pid = encodeURIComponent(projectId.value.trim());
+        const pidRaw = projectId.value.trim();
+        if (!pidRaw) {
+          historySummaryPre.textContent = pretty({});
+          historyPre.textContent = pretty({});
+          return;
+        }
+        const pid = encodeURIComponent(pidRaw);
         const data = await callApi("/runs/" + pid + "/history?limit=20");
         historySummaryPre.textContent = pretty(buildHistorySummary(data));
         historyPre.textContent = pretty(data);
       }
 
+      async function isProjectCompleted(projectIdValue) {
+        const pid = encodeURIComponent(projectIdValue);
+        const snapshot = await callApi("/runs/" + pid + "/state");
+        const values = snapshot && snapshot.values ? snapshot.values : {};
+        const hasCompletedArtifacts =
+          Object.prototype.hasOwnProperty.call(values, "review_report") &&
+          Object.prototype.hasOwnProperty.call(values, "task_breakdown") &&
+          Object.prototype.hasOwnProperty.call(values, "prompt_pack");
+        const noPendingNext = Array.isArray(snapshot.next) && snapshot.next.length === 0;
+        return noPendingNext && hasCompletedArtifacts;
+      }
+
+      function resetResultViews() {
+        resultSummaryPre.textContent = pretty({});
+        resultPre.textContent = pretty({});
+        statusTag.textContent = "";
+        statusTag.className = "status";
+        completedSections.classList.add("hidden");
+        completedSections.innerHTML = "";
+      }
+
+      async function hydrateResultFromState() {
+        const pidRaw = getProjectIdOrError();
+        if (!pidRaw) return;
+        const pid = encodeURIComponent(pidRaw);
+        const snapshot = await callApi("/runs/" + pid + "/state");
+        stateSummaryPre.textContent = pretty(buildStateSummary(snapshot));
+        statePre.textContent = pretty(snapshot);
+
+        const values = snapshot && snapshot.values ? snapshot.values : {};
+        const completedKeys = [
+          "requirement_doc",
+          "feasibility_report",
+          "architecture_plan",
+          "task_breakdown",
+          "prompt_pack",
+          "review_report"
+        ];
+        const hasCompletedResult = completedKeys.every((k) =>
+          Object.prototype.hasOwnProperty.call(values, k)
+        );
+
+        if (hasCompletedResult && Array.isArray(snapshot.next) && snapshot.next.length === 0) {
+          const rebuiltResult = {};
+          completedKeys.forEach((k) => {
+            rebuiltResult[k] = values[k];
+          });
+          setResult({
+            project_id: snapshot.project_id,
+            status: "completed",
+            result: rebuiltResult,
+            state: values,
+            source: "state_snapshot"
+          });
+          return;
+        }
+
+        if (Array.isArray(snapshot.next) && snapshot.next.length > 0) {
+          setResult({
+            project_id: snapshot.project_id,
+            status: "interrupted",
+            interrupts: [],
+            state: values,
+            source: "state_snapshot"
+          });
+          return;
+        }
+
+        setResult({
+          project_id: snapshot.project_id,
+          status: "loaded",
+          state: values,
+          source: "state_snapshot"
+        });
+      }
+
       runBtn.addEventListener("click", async function () {
+        const pidRaw = getProjectIdOrError();
+        if (!pidRaw) return;
         setLoading(true);
         try {
+          let shouldRun = true;
+          try {
+            const completed = await isProjectCompleted(pidRaw);
+            if (completed) {
+              shouldRun = window.confirm(
+                `项目 ${pidRaw} 已有完成结果。继续执行会以新需求生成新结果并覆盖当前展示，是否继续？`
+              );
+            }
+          } catch (_) {
+            // If state check fails, continue with normal run behavior.
+          }
+          if (!shouldRun) {
+            return;
+          }
+
           const data = await callApi("/runs", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              project_id: projectId.value.trim(),
+              project_id: pidRaw,
               raw_requirement: rawRequirement.value
             })
           });
@@ -485,9 +1350,11 @@
       });
 
       resumeBtn.addEventListener("click", async function () {
+        const pidRaw = getProjectIdOrError();
+        if (!pidRaw) return;
         setLoading(true);
         try {
-          const pid = encodeURIComponent(projectId.value.trim());
+          const pid = encodeURIComponent(pidRaw);
           const fromFields = collectFieldInputs();
           let parsed = {};
           if (Object.keys(fromFields).length > 0) {
@@ -538,8 +1405,147 @@
         }
       });
 
+      hydrateResultBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          await hydrateResultFromState();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      purgeBtn.addEventListener("click", async function () {
+        const pid = getProjectIdOrError();
+        if (!pid) return;
+        const confirmed = window.confirm(
+          `确认删除项目 ${pid} 的全部 checkpoint 历史吗？此操作不可撤销。`
+        );
+        if (!confirmed) {
+          return;
+        }
+
+        setLoading(true);
+        try {
+          const data = await callApi("/runs/" + encodeURIComponent(pid) + "/checkpoints", {
+            method: "DELETE"
+          });
+          resetResultViews();
+          setResult(data);
+          await loadState();
+          await loadHistory();
+          setMissingFields([]);
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      genProjectIdBtn.addEventListener("click", function () {
+        projectId.value = generateProjectId();
+      });
+
+      navWorkflow.addEventListener("click", function () {
+        switchView("workflow");
+      });
+
+      navAgentEditor.addEventListener("click", async function () {
+        switchView("agents");
+        setLoading(true);
+        try {
+          await loadAgentSettings();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      secretToggleBtn.addEventListener("click", async function () {
+        revealSecrets = !revealSecrets;
+        secretToggleBtn.textContent = revealSecrets ? "隐藏密钥" : "显示密钥";
+        setSecretInputMode(revealSecrets);
+        setLoading(true);
+        try {
+          await loadAgentSettings();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      cfgProvider.addEventListener("change", function () {
+        updateProviderFieldsVisibility(cfgProvider.value);
+      });
+
+      agentLoadBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          await loadAgentSettings();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      agentSaveBtn.addEventListener("click", async function () {
+        const updates = collectAgentSettingsPayload();
+        if (!Object.keys(updates).length) {
+          setResult({ status: "agent_settings", message: "没有需要保存的变更。" });
+          return;
+        }
+        setLoading(true);
+        try {
+          const data = await callApi("/agents/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updates),
+          });
+          applyAgentSettings(data.settings || {});
+          setResult({
+            status: "agent_settings_updated",
+            updated_fields: Object.keys(updates),
+          });
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      persistEnvBtn.addEventListener("click", async function () {
+        const confirmed = window.confirm(
+          "确认将当前编辑 Agent 配置写入 .env 吗？该操作会覆盖同名配置项，重启后将按新值生效。"
+        );
+        if (!confirmed) {
+          return;
+        }
+        setLoading(true);
+        try {
+          const data = await callApi("/agents/settings/persist-env", {
+            method: "POST",
+          });
+          setResult({
+            status: "env_persisted",
+            env_path: data.env_path,
+            updated_keys_count: Array.isArray(data.updated_keys) ? data.updated_keys.length : 0,
+            updated_keys: data.updated_keys || [],
+          });
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
       loadState().catch(function () {});
       loadHistory().catch(function () {});
+      setSecretInputMode(false);
+      updateProviderFieldsVisibility(cfgProvider.value || "openai");
     })();
   </script>
 </body>
