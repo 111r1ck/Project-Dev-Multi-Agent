@@ -132,6 +132,34 @@ def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> d
     }
 
 
+def _build_prompt_quality_review(tasks: list[dict], prompts: list[dict]) -> dict | None:
+    task_by_title = {
+        str(task.get("title", "")).strip(): task for task in (tasks or []) if task.get("title")
+    }
+    fallback_p0: list[str] = []
+    for prompt in prompts or []:
+        if not prompt.get("is_fallback"):
+            continue
+        title = str(prompt.get("task_title", "")).strip()
+        task = task_by_title.get(title, {})
+        priority = str(task.get("priority", "")).strip().upper()
+        if priority in {"P0", "最高", "高"}:
+            fallback_p0.append(title or "未命名任务")
+
+    if not fallback_p0:
+        return None
+    return {
+        "passed": False,
+        "issues": [
+            "P0任务使用了兜底提示词，关键任务缺少针对性编码与测试说明。"
+        ]
+        + fallback_p0[:5],
+        "suggestions": [
+            "请重新生成这些P0任务的prompt_pack，确保包含输入输出、约束、边界条件、回归测试与验收标准。"
+        ],
+    }
+
+
 def _build_reviewer_cache_payload(
     req: dict,
     fea: dict,
@@ -198,6 +226,10 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     )
     if assumption_review is not None:
         return _apply_review_outcome(state, assumption_review, passed=False)
+
+    prompt_quality_review = _build_prompt_quality_review(tasks, prompts)
+    if prompt_quality_review is not None:
+        return _apply_review_outcome(state, prompt_quality_review, passed=False)
 
     # Gate before reviewer LLM call:
     # key blocking issues from previous review must be covered by current tasks.

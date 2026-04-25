@@ -144,6 +144,45 @@ def _extract_issue_terms(issue: str, max_terms: int = 4) -> list[str]:
     return terms
 
 
+_COVERAGE_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("数据保留", "保留策略", "生命周期", "归档", "冷热", "容量", "存储规划", "备份恢复"),
+    ("性能验证", "性能测试", "压测", "负载", "容量模型", "基准", "回归检测", "响应时间", "延迟"),
+    ("监控告警", "监控", "告警规则", "指标采集", "日志追踪", "链路追踪", "可观测"),
+    ("故障切换", "故障恢复", "高可用", "可用性", "备份恢复", "容灾", "演练"),
+    ("灰度发布", "回滚", "发布策略", "变更验证", "流量切换"),
+    ("权限", "访问控制", "RBAC", "隔离", "鉴权", "越权", "合规"),
+    ("审计", "日志", "留痕", "追踪", "回溯"),
+    ("依赖", "顺序", "前置", "状态机", "事件", "触发", "闭环"),
+    ("移动端", "移动", "App", "功能边界", "配置类操作", "路由守卫"),
+)
+
+
+def _alias_group_hits(text: str) -> set[int]:
+    normalized = _normalize_text(text).lower()
+    hits: set[int] = set()
+    for idx, group in enumerate(_COVERAGE_ALIAS_GROUPS):
+        if any(marker.lower() in normalized for marker in group):
+            hits.add(idx)
+    return hits
+
+
+def _is_issue_covered_by_task(issue: str, task_text: str) -> bool:
+    issue_groups = _alias_group_hits(issue)
+    if issue_groups:
+        task_groups = _alias_group_hits(task_text)
+        shared = issue_groups & task_groups
+        if len(shared) >= min(2, len(issue_groups)):
+            return True
+        if shared and any(marker in issue for marker in ("缺失", "未覆盖", "无", "缺少")):
+            return True
+
+    terms = _extract_issue_terms(issue)
+    if not terms:
+        return False
+    threshold = min(2, len(terms))
+    return sum(1 for term in terms if term in task_text) >= threshold
+
+
 def find_uncovered_blocking_issues(
     tasks: list[dict[str, Any]],
     blocking_issues: list[str],
@@ -161,18 +200,6 @@ def find_uncovered_blocking_issues(
             uncovered.append(issue)
             continue
 
-        terms = _extract_issue_terms(issue)
-        if not terms:
-            # Conservatively mark as uncovered when no usable signal can be extracted.
-            uncovered.append(issue)
-            continue
-        threshold = min(2, len(terms))
-        matched = False
-        for text in task_texts:
-            score = sum(1 for term in terms if term in text)
-            if score >= threshold:
-                matched = True
-                break
-        if not matched:
+        if not any(_is_issue_covered_by_task(issue, text) for text in task_texts):
             uncovered.append(issue)
     return uncovered

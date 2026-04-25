@@ -54,23 +54,23 @@ def test_planner_adds_assumption_tasks_and_excludes_deferred_scope(monkeypatch):
         },
         "assumption_pack": {
             "human_gate_exhausted": True,
-            "unresolved_missing_info": ["外部服务接口 SLA 未明确"],
+            "unresolved_missing_info": ["外部服务接口服务等级未明确"],
             "blocking": [],
             "assumptions": [
                 {
-                    "source": "外部服务接口 SLA 未明确",
+                    "source": "外部服务接口服务等级未明确",
                     "assumption": "按可重试、可降级和人工兜底策略继续。",
                 }
             ],
             "risk_controls": [
                 {
-                    "missing_info": "外部服务接口 SLA 未明确",
+                    "missing_info": "外部服务接口服务等级未明确",
                     "control": "提供适配器、mock、重试、降级与人工处理边界。",
                 }
             ],
             "deferred_scope": ["高级分析报表"],
             "requires_user_confirmation": [
-                {"item": "外部服务接口 SLA 未明确", "phase": "上线前确认"}
+                {"item": "外部服务接口服务等级未明确", "phase": "上线前确认"}
             ],
         },
         "review_report": {},
@@ -106,10 +106,10 @@ def test_reviewer_blocks_uncontrolled_assumption_pack(monkeypatch):
         "assumption_pack": {
             "human_gate_exhausted": True,
             "blocking": [],
-            "assumptions": [{"source": "外部服务接口 SLA 未明确"}],
-            "risk_controls": [{"missing_info": "外部服务接口 SLA 未明确"}],
+            "assumptions": [{"source": "外部服务接口服务等级未明确"}],
+            "risk_controls": [{"missing_info": "外部服务接口服务等级未明确"}],
             "deferred_scope": [],
-            "requires_user_confirmation": [{"item": "外部服务接口 SLA 未明确"}],
+            "requires_user_confirmation": [{"item": "外部服务接口服务等级未明确"}],
         },
         "review_report": {},
         "review_rounds": 0,

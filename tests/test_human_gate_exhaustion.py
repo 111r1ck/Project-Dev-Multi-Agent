@@ -9,7 +9,7 @@ class FakeExhaustedFeasibilityAgent:
                 feasible=False,
                 complexity="high",
                 missing_info=[
-                    "外部服务接口 SLA 未明确",
+                    "外部服务接口服务等级未明确",
                     "高级分析报表口径未确认",
                 ],
                 risks=["信息不足"],
@@ -38,7 +38,7 @@ def test_human_gate_exhaustion_generates_assumption_pack(monkeypatch):
     assert result["next_step"] == "architect"
     assert result["assumption_pack"]["human_gate_exhausted"] is True
     assert result["assumption_pack"]["unresolved_missing_info"] == [
-        "外部服务接口 SLA 未明确",
+        "外部服务接口服务等级未明确",
         "高级分析报表口径未确认",
     ]
     assert "受控假设" in result["errors"][-1]

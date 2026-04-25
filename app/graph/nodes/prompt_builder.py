@@ -8,6 +8,9 @@ from app.graph.state import ProjectState
 from app.services.prompt_cache import load_cached_prompts, save_cached_prompts
 
 
+PROMPT_BUILD_BATCH_SIZE = 8
+
+
 def _build_fallback_prompt(task: dict) -> dict:
     title = task.get("title", "未命名任务")
     description = task.get("description", "")
@@ -29,6 +32,7 @@ def _build_fallback_prompt(task: dict) -> dict:
             "覆盖：正常流程、异常流程、边界条件、回归点。\n"
             "输出：测试用例清单、关键断言、验收标准。"
         ),
+        "is_fallback": True,
     }
 
 
@@ -57,6 +61,7 @@ def _align_prompt_pack_to_tasks(
                         "task_title": title,
                         "coding_prompt": coding_prompt,
                         "test_prompt": test_prompt,
+                        "is_fallback": bool(chosen.get("is_fallback", False)),
                     }
                 )
                 continue
@@ -70,10 +75,18 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
     review_rounds = int(state.get("review_rounds", 0) or 0)
 
     prompt_slots, missing_indices = load_cached_prompts(project_id, review_rounds, all_tasks)
-    missing_tasks = [all_tasks[i] for i in missing_indices]
+    if missing_indices:
+        agent = build_prompt_builder_agent()
+    else:
+        agent = None
 
-    if missing_tasks:
-        task_summary = summarize_task_breakdown(missing_tasks, max_items=8)
+    for batch_start in range(0, len(missing_indices), PROMPT_BUILD_BATCH_SIZE):
+        batch_indices = missing_indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
+        missing_tasks = [all_tasks[i] for i in batch_indices]
+        task_summary = summarize_task_breakdown(
+            missing_tasks,
+            max_items=PROMPT_BUILD_BATCH_SIZE,
+        )
         compact_context = (
             "请为以下任务生成编码提示词与测试提示词。"
             "只针对列出的任务生成，避免重复扩写。\n"
@@ -96,7 +109,7 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
                 "3) 避免无关扩写。"
             )
 
-        agent = build_prompt_builder_agent()
+        assert agent is not None
         result = agent.invoke(
             {
                 "messages": [
@@ -112,7 +125,7 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
         aligned_generated = _align_prompt_pack_to_tasks(missing_tasks, generated_prompt_pack)
 
         task_prompt_pairs: list[tuple[dict, dict]] = []
-        for idx, prompt in zip(missing_indices, aligned_generated):
+        for idx, prompt in zip(batch_indices, aligned_generated):
             prompt_slots[idx] = prompt
             task_prompt_pairs.append((all_tasks[idx], prompt))
         save_cached_prompts(project_id, review_rounds, task_prompt_pairs)

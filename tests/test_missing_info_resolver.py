@@ -5,7 +5,7 @@ def test_build_assumption_pack_classifies_missing_info_generically():
     pack = build_assumption_pack(
         missing_info=[
             "核心身份认证方式尚未确定",
-            "外部服务接口 SLA 未明确",
+            "外部服务接口服务等级未明确",
             "后续增强报表口径未确认",
         ],
         requirement_doc={"summary": "建设业务管理系统"},
@@ -15,8 +15,8 @@ def test_build_assumption_pack_classifies_missing_info_generically():
 
     assert pack["human_gate_exhausted"] is True
     assert "核心身份认证方式尚未确定" in pack["blocking"]
-    assert pack["assumptions"][0]["source"] == "外部服务接口 SLA 未明确"
-    assert pack["risk_controls"][0]["missing_info"] == "外部服务接口 SLA 未明确"
+    assert pack["assumptions"][0]["source"] == "外部服务接口服务等级未明确"
+    assert pack["risk_controls"][0]["missing_info"] == "外部服务接口服务等级未明确"
     assert "后续增强报表口径未确认" in pack["deferred_scope"]
     assert "后续增强报表口径未确认" not in pack["blocking"]
 

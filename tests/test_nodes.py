@@ -1,3 +1,5 @@
+import re
+
 from app.agents.schemas import (
     ArchitecturePlan,
     PlannerOutput,
@@ -7,7 +9,7 @@ from app.agents.schemas import (
     ReviewReport,
     TaskItem,
 )
-from app.graph.nodes.architect import architect_node
+from app.graph.nodes.architect import _normalize_architecture_plan, architect_node
 from app.graph.nodes.planner import planner_node
 from app.graph.nodes.prompt_builder import prompt_builder_node
 from app.graph.nodes.requirement_analyst import requirement_analyst_node
@@ -87,6 +89,26 @@ def test_architect_normalizes_client_side_style_and_module_responsibilities(monk
     assert "Client-Side Only SPA" in plan["architecture_style"]
     assert plan["modules"][0]["responsibilities"] == ["记录关键操作日志并支持审计回溯。"]
     assert "responsibility" not in plan["modules"][0]
+
+
+def test_architect_normalizes_competing_backend_language_options():
+    plan = _normalize_architecture_plan(
+        {
+            "architecture_style": "标准前后端分离的模块化单体",
+            "backend": [
+                "Python (FastAPI/Flask)",
+                "Java (Spring Boot)",
+                "Go (for high concurrency ingestion if needed)",
+                "Flink/Spark Streaming",
+                "Kafka",
+            ],
+            "frontend": ["React"],
+            "modules": [],
+            "data_entities": [],
+        }
+    )
+
+    assert plan["backend"] == ["Python (FastAPI/Flask)", "Flink/Spark Streaming", "Kafka"]
 
 
 class FakePlannerAgent:
@@ -244,6 +266,87 @@ def test_planner_auto_fill_missing_tasks_from_review(monkeypatch):
     assert "外部接口异常处理与降级方案任务" in titles
 
 
+def test_planner_extracts_supplemental_tasks_from_review_suggestions(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {
+            "summary": "通用协作平台",
+            "modules": ["流程", "内容", "文件"],
+            "constraints": [],
+        },
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {
+            "suggestions": [
+                "【补充文件管理任务】任务摘要中未见'文件管理模块实现'任务，建议补充文件上传/下载/删除的完整实现任务。",
+                "【补充内容检索任务】需求明确要求内容推荐，建议补充内容检索与推荐任务。",
+                "【补充登录集成任务】建议补充本地账号登录、双登录方式切换逻辑的实现任务。",
+            ],
+        },
+        "review_rounds": 1,
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+
+    assert "文件上传/下载/删除的完整实现任务" in titles
+    assert "内容检索与推荐任务" in titles
+    assert "本地账号登录、双登录方式切换逻辑的实现任务" in titles
+
+
+def test_planner_appends_review_time_constraints_to_existing_task(monkeypatch):
+    class CompliancePlannerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": PlannerOutput(
+                    tasks=[
+                        TaskItem(
+                            title="外部审批材料准备与跟踪",
+                            description="完成外部审批材料准备。",
+                            priority="P1",
+                            depends_on=[],
+                            owner_role="产品经理",
+                        )
+                    ]
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: CompliancePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {"summary": "任意系统", "modules": [], "constraints": []},
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {
+            "suggestions": [
+                "【明确合规时间节点】在'外部审批材料准备与跟踪'任务中添加时间约束：'上线前2周启动材料提交，上线前1周完成审核与验证'。"
+            ]
+        },
+        "review_rounds": 1,
+    }
+
+    result = planner_node(state)
+    compliance_task = next(
+        task for task in result["task_breakdown"] if task["title"] == "外部审批材料准备与跟踪"
+    )
+
+    assert "上线前2周启动材料提交" in compliance_task["description"]
+    assert "上线前1周完成审核与验证" in compliance_task["description"]
+
+
 def test_planner_infers_priority_and_owner_from_review_text(monkeypatch):
     monkeypatch.setattr(
         "app.graph.nodes.planner.build_planner_agent",
@@ -316,6 +419,64 @@ def test_prompt_builder_aligns_and_fills(monkeypatch):
     assert prompt_pack[1]["task_title"] == "任务B"
     assert prompt_pack[1]["coding_prompt"]
     assert prompt_pack[1]["test_prompt"]
+    assert prompt_pack[1]["is_fallback"] is True
+
+
+def test_prompt_builder_generates_missing_tasks_in_batches(monkeypatch):
+    calls = []
+
+    class BatchPromptBuilderAgent:
+        def invoke(self, payload):
+            content = payload["messages"][0]["content"]
+            calls.append(content)
+            titles = re.findall(r"^- (.+?) \| priority=", content, flags=re.MULTILINE)
+            return {
+                "structured_response": PromptPackOutput(
+                    prompts=[
+                        PromptTask(
+                            task_title=title,
+                            coding_prompt=f"实现{title}",
+                            test_prompt=f"测试{title}",
+                        )
+                        for title in titles
+                    ]
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
+        lambda: BatchPromptBuilderAgent(),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        lambda _project_id, _review_rounds, tasks: ([None] * len(tasks), list(range(len(tasks)))),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
+    tasks = [
+        {
+            "title": f"任务{i}",
+            "description": f"描述{i}",
+            "priority": "P1",
+            "depends_on": [],
+            "owner_role": "后端开发工程师",
+        }
+        for i in range(10)
+    ]
+
+    result = prompt_builder_node(
+        {
+            "task_breakdown": tasks,
+            "review_report": {},
+            "review_rounds": 0,
+        }
+    )
+
+    assert len(calls) == 2
+    assert len(result["prompt_pack"]) == 10
+    assert all(not item.get("is_fallback") for item in result["prompt_pack"])
 
 
 def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
@@ -386,6 +547,85 @@ def test_reviewer_calls_llm_when_blocking_issue_is_covered(monkeypatch):
     assert result["next_step"] == "finish"
     assert result["review_report"]["passed"] is True
     assert fake.calls == 1
+
+
+def test_reviewer_gate_accepts_semantic_coverage_for_data_retention(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "test", "constraints": ["关键数据保留不少于2年"]},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "定义数据生命周期管理策略",
+                "description": "制定关键数据2年保留、冷热分层、归档、容量预估和恢复验证。",
+                "priority": "P0",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [{"task_title": "定义数据生命周期管理策略", "coding_prompt": "a", "test_prompt": "b"}],
+        "review_report": {
+            "passed": False,
+            "issues": ["【数据保留策略缺失】需求要求关键数据保留≥2年，但无数据生命周期管理、归档策略、存储容量规划相关任务"],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+
+    assert result["review_report"]["passed"] is True
+    assert fake.calls == 1
+
+
+def test_reviewer_blocks_p0_fallback_prompts(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "test", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "建立关键路径延迟基准与性能回归检测",
+                "description": "定义延迟基准。",
+                "priority": "P0",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [
+            {
+                "task_title": "建立关键路径延迟基准与性能回归检测",
+                "coding_prompt": "fallback",
+                "test_prompt": "fallback",
+                "is_fallback": True,
+            }
+        ],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+
+    assert result["next_step"] == "planner"
+    assert result["review_report"]["passed"] is False
+    assert "P0任务使用了兜底提示词" in result["review_report"]["issues"][0]
+    assert fake.calls == 0
 
 
 def test_reviewer_forces_rework_when_passed_report_contains_blocking_issues(monkeypatch):

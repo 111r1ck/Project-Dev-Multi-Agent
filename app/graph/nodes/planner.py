@@ -39,6 +39,7 @@ def _extract_missing_task_candidates(review_report: dict) -> list[tuple[str, str
         r"缺少([^，。；\n]{2,60})任务",
         r"未包含([^，。；\n]{2,60})任务",
         r"未包含([^，。；\n]{2,60})",
+        r"补充([^，。；\n]{2,80})任务",
     ]
 
     for raw in texts:
@@ -121,6 +122,38 @@ def _ensure_missing_tasks_from_review(
     return normalized_tasks
 
 
+def _apply_review_task_updates(tasks: list[dict], review_report: dict) -> list[dict]:
+    if not isinstance(review_report, dict):
+        return tasks
+
+    texts: list[str] = []
+    texts.extend([str(item) for item in (review_report.get("issues", []) or [])])
+    texts.extend([str(item) for item in (review_report.get("suggestions", []) or [])])
+    if not texts:
+        return tasks
+
+    normalized_tasks = [dict(task) for task in tasks]
+    title_to_task = {
+        str(task.get("title", "")).strip(): task for task in normalized_tasks if task.get("title")
+    }
+    update_patterns = [
+        r"在['‘“\"]?([^'’”\"]+?)['’”\"]?任务中添加[^：:]*[：:]\s*['‘“\"]?([^'’”\"。；\n]+)",
+        r"为['‘“\"]?([^'’”\"]+?)['’”\"]?任务补充[^：:]*[：:]\s*['‘“\"]?([^'’”\"。；\n]+)",
+    ]
+    for text in texts:
+        normalized_text = _normalize_text(text)
+        for pattern in update_patterns:
+            for title, addition in re.findall(pattern, normalized_text):
+                task = title_to_task.get(title.strip())
+                addition = addition.strip()
+                if not task or not addition:
+                    continue
+                description = str(task.get("description", "")).strip()
+                if addition not in description:
+                    task["description"] = f"{description} {addition}".strip()
+    return normalized_tasks
+
+
 def planner_node(state: ProjectState) -> ProjectState:
     req = state["requirement_doc"]
     fea = state.get("feasibility_report", {}) or {}
@@ -184,6 +217,7 @@ def planner_node(state: ProjectState) -> ProjectState:
     tasks = ensure_guardrail_tasks(tasks, signals)
     tasks = apply_assumption_pack_tasks(tasks, state.get("assumption_pack", {}))
     tasks = _ensure_missing_tasks_from_review(tasks, review_report)
+    tasks = _apply_review_task_updates(tasks, review_report)
     tasks = resolve_task_dependencies(tasks)
 
     return {
