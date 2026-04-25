@@ -100,7 +100,9 @@ def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> d
     suggestions: list[str] = []
 
     blocking = [str(item) for item in (assumption_pack.get("blocking", []) or [])]
-    if blocking:
+    scope_reductions = assumption_pack.get("scope_reductions", []) or []
+    has_scope_reduction = bool(scope_reductions)
+    if blocking and not has_scope_reduction:
         issues.append("人工补充上限后仍存在阻塞信息，不能仅依赖受控假设继续。")
         issues.extend(blocking[:5])
 
@@ -116,6 +118,9 @@ def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> d
     if assumption_pack.get("requires_user_confirmation") and "确认" not in task_text:
         issues.append("上线前需确认事项未形成确认清单任务。")
         suggestions.append("请补充“上线前确认清单与决策复核”任务。")
+    if blocking and has_scope_reduction and "范围收缩" not in task_text and "替代方案" not in task_text:
+        issues.append("阻塞信息已转为范围收缩，但缺少范围收缩或替代方案确认任务。")
+        suggestions.append("请补充“确认范围收缩与替代方案边界”任务。")
 
     deferred = [str(item) for item in (assumption_pack.get("deferred_scope", []) or [])]
     leaked = [item for item in deferred if item and item in task_text]

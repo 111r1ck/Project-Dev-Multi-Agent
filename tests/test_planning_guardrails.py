@@ -1,5 +1,9 @@
 from app.services.constraint_classifier import ConstraintSignal
-from app.services.planning_guardrails import ensure_guardrail_tasks
+from app.services.planning_guardrails import (
+    align_dependency_priorities,
+    ensure_architecture_module_tasks,
+    ensure_guardrail_tasks,
+)
 from app.services.task_dependency_resolver import resolve_task_dependencies
 
 
@@ -71,3 +75,57 @@ def test_dependency_resolver_adds_foundational_dependencies_without_cycles():
     assert "实现核心业务接口" in by_title["建立容量模型与负载基准测试"]["depends_on"]
     for item in result:
         assert item["title"] not in item["depends_on"]
+
+
+def test_architecture_modules_without_tasks_get_generic_implementation_tasks():
+    tasks = [
+        {
+            "title": "实现核心业务接口",
+            "description": "实现核心流程。",
+            "priority": "P0",
+            "depends_on": [],
+            "owner_role": "后端开发工程师",
+        }
+    ]
+    architecture_plan = {
+        "modules": [
+            {
+                "name": "文件处理模块",
+                "responsibilities": ["负责文件上传、下载、删除和存储清理。"],
+            },
+            {
+                "name": "内容检索模块",
+                "responsibilities": ["负责内容索引、搜索和推荐。"],
+            },
+        ]
+    }
+
+    result = ensure_architecture_module_tasks(tasks, architecture_plan)
+    titles = {item["title"] for item in result}
+
+    assert "实现文件处理模块核心功能" in titles
+    assert "实现内容检索模块核心功能" in titles
+
+
+def test_dependency_priority_is_promoted_when_high_priority_task_depends_on_lower_priority_task():
+    tasks = [
+        {
+            "title": "基础能力实现",
+            "description": "提供核心前置能力。",
+            "priority": "P2",
+            "depends_on": [],
+            "owner_role": "后端开发工程师",
+        },
+        {
+            "title": "关键业务流程实现",
+            "description": "实现关键业务流程。",
+            "priority": "P0",
+            "depends_on": ["基础能力实现"],
+            "owner_role": "后端开发工程师",
+        },
+    ]
+
+    result = align_dependency_priorities(tasks)
+    by_title = {item["title"]: item for item in result}
+
+    assert by_title["基础能力实现"]["priority"] == "P0"

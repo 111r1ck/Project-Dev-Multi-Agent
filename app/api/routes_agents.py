@@ -75,7 +75,11 @@ async def patch_agents_settings(req: AgentSettingsUpdateRequest):
 
 
 @router.post("/settings/persist-env")
-async def persist_agents_settings_to_env():
+async def persist_agents_settings_to_env(req: AgentSettingsUpdateRequest | None = None):
+    if req is not None:
+        updates: dict[str, Any] = req.model_dump(exclude_none=True)
+        if updates:
+            update_runtime_settings(updates)
     persisted = persist_runtime_settings_to_env()
     return {
         "status": "persisted",

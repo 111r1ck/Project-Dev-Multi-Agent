@@ -71,8 +71,31 @@ def _task_text(task: dict) -> str:
     return f"{task.get('title', '')} {task.get('description', '')}"
 
 
+def _combined_task_text(tasks: list[dict]) -> str:
+    return " ".join(_task_text(task) for task in tasks)
+
+
 def _already_covered(tasks: list[dict], title: str) -> bool:
     return any(title == str(task.get("title", "")).strip() for task in tasks)
+
+
+def _priority_rank(priority: str) -> int:
+    normalized = str(priority or "").strip().upper()
+    mapping = {
+        "最高": 0,
+        "高": 0,
+        "P0": 0,
+        "中": 1,
+        "P1": 1,
+        "低": 2,
+        "P2": 2,
+        "P3": 3,
+    }
+    return mapping.get(normalized, 1)
+
+
+def _priority_label(rank: int) -> str:
+    return {0: "P0", 1: "P1", 2: "P2", 3: "P3"}.get(rank, "P1")
 
 
 def ensure_guardrail_tasks(
@@ -86,6 +109,61 @@ def ensure_guardrail_tasks(
         if not template or _already_covered(normalized, template["title"]):
             continue
         normalized.append({**template, "depends_on": []})
+    return normalized
+
+
+def ensure_architecture_module_tasks(
+    tasks: list[dict],
+    architecture_plan: dict,
+) -> list[dict]:
+    normalized = list(tasks)
+    task_text = _combined_task_text(normalized)
+    for module in (architecture_plan or {}).get("modules", []) or []:
+        if not isinstance(module, dict):
+            continue
+        name = str(module.get("name", "")).strip()
+        if not name or name in task_text:
+            continue
+        responsibilities = module.get("responsibilities", []) or module.get("tasks", []) or []
+        if isinstance(responsibilities, str):
+            responsibilities = [responsibilities]
+        responsibility_text = "；".join(str(item).strip() for item in responsibilities[:3] if str(item).strip())
+        description = f"基于架构模块补齐：实现{name}的核心能力、接口、异常处理与验收测试。"
+        if responsibility_text:
+            description += f" 模块职责：{responsibility_text}。"
+        normalized.append(
+            {
+                "title": f"实现{name}核心功能",
+                "description": description,
+                "priority": "P1",
+                "depends_on": ["设计核心数据模型与持久化方案"]
+                if _already_covered(normalized, "设计核心数据模型与持久化方案")
+                else [],
+                "owner_role": "后端开发工程师",
+            }
+        )
+        task_text += f" {name} {description}"
+    return normalized
+
+
+def align_dependency_priorities(tasks: list[dict]) -> list[dict]:
+    normalized = [dict(task) for task in tasks]
+    by_title = {
+        str(task.get("title", "")).strip(): task for task in normalized if task.get("title")
+    }
+    changed = True
+    while changed:
+        changed = False
+        for task in normalized:
+            task_rank = _priority_rank(str(task.get("priority", "")))
+            for dep_title in task.get("depends_on", []) or []:
+                dep = by_title.get(str(dep_title).strip())
+                if not dep:
+                    continue
+                dep_rank = _priority_rank(str(dep.get("priority", "")))
+                if dep_rank > task_rank:
+                    dep["priority"] = _priority_label(task_rank)
+                    changed = True
     return normalized
 
 
@@ -116,6 +194,18 @@ def apply_assumption_pack_tasks(
                     "priority": "P0",
                     "depends_on": [],
                     "owner_role": "架构师",
+                }
+            )
+
+    if assumption_pack.get("scope_reductions"):
+        if not _already_covered(normalized, "确认范围收缩与替代方案边界"):
+            normalized.append(
+                {
+                    "title": "确认范围收缩与替代方案边界",
+                    "description": "针对人工补充上限后的阻塞信息，明确MVP范围收缩、替代实现、mock验证、人工兜底和范围恢复条件。",
+                    "priority": "P0",
+                    "depends_on": [],
+                    "owner_role": "产品经理",
                 }
             )
 

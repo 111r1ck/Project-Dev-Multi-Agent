@@ -1574,8 +1574,11 @@
         }
         setLoading(true);
         try {
+          const updates = collectAgentSettingsPayload();
           const data = await callApi("/agents/settings/persist-env", {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updates),
           });
           setResult({
             status: "env_persisted",

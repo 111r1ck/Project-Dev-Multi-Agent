@@ -45,6 +45,7 @@ def build_assumption_pack(
         "human_gate_exhausted": True,
         "unresolved_missing_info": unresolved,
         "blocking": [],
+        "scope_reductions": [],
         "assumptions": [],
         "risk_controls": [],
         "deferred_scope": [],
@@ -54,6 +55,21 @@ def build_assumption_pack(
     for item in unresolved:
         if _contains_any(item, _BLOCKING_HINTS):
             pack["blocking"].append(item)
+            pack["scope_reductions"].append(
+                {
+                    "missing_info": item,
+                    "action": "将受影响能力收缩为替代方案、mock验证或人工兜底路径，并在范围恢复前完成真实信息确认。",
+                }
+            )
+            pack["risk_controls"].append(
+                {
+                    "missing_info": item,
+                    "control": "明确不可自动假设的边界，提供替代方案验证、人工签核和上线前复核任务。",
+                }
+            )
+            pack["requires_user_confirmation"].append(
+                {"item": item, "phase": "架构评审前确认"}
+            )
             continue
 
         if _contains_any(item, _DEFERRABLE_HINTS):

@@ -10,7 +10,9 @@ from app.graph.nodes.common import (
 from app.graph.state import ProjectState
 from app.services.constraint_classifier import classify_constraints
 from app.services.planning_guardrails import (
+    align_dependency_priorities,
     apply_assumption_pack_tasks,
+    ensure_architecture_module_tasks,
     ensure_guardrail_tasks,
 )
 from app.services.task_dependency_resolver import resolve_task_dependencies
@@ -215,10 +217,12 @@ def planner_node(state: ProjectState) -> ProjectState:
         review_report=review_report,
     )
     tasks = ensure_guardrail_tasks(tasks, signals)
+    tasks = ensure_architecture_module_tasks(tasks, arch)
     tasks = apply_assumption_pack_tasks(tasks, state.get("assumption_pack", {}))
     tasks = _ensure_missing_tasks_from_review(tasks, review_report)
     tasks = _apply_review_task_updates(tasks, review_report)
     tasks = resolve_task_dependencies(tasks)
+    tasks = align_dependency_priorities(tasks)
 
     return {
         **state,
