@@ -113,6 +113,7 @@ async def run_project_analysis(
             "thread_id": req.project_id,
             "raw_requirement": req.raw_requirement,
             "human_feedback_notes": [],
+            "project_decisions": {},
             "errors": [],
             "need_human": False,
             "human_rounds": 0,

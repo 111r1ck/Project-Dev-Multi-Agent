@@ -8,3 +8,5 @@ __pycache__/
 Thumbs.db
 .data/
 *.egg-info/
+.pydeps/
+.tmp_pip*/

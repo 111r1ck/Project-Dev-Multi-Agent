@@ -50,6 +50,49 @@ def _apply_review_outcome(
     }
 
 
+def _has_blocking_issue(review_report: dict) -> bool:
+    if not isinstance(review_report, dict):
+        return False
+    issues = [str(item) for item in (review_report.get("issues", []) or [])]
+    if not issues:
+        return False
+    blocking_markers = [
+        "阻塞",
+        "关键",
+        "缺失",
+        "无法",
+        "不能",
+        "风险",
+        "合规",
+        "审计",
+        "日志持久化",
+        "性能验证",
+        "性能测试",
+        "无法验证",
+        "数据丢失",
+        "依赖关系",
+        "冲突",
+        "must",
+        "blocker",
+        "critical",
+    ]
+    normalized_issues = [issue.lower() for issue in issues]
+    return any(
+        marker.lower() in issue
+        for issue in normalized_issues
+        for marker in blocking_markers
+    )
+
+
+def _normalize_review_passed(review_report: dict) -> tuple[dict, bool]:
+    normalized = dict(review_report)
+    passed = bool(normalized.get("passed"))
+    if passed and _has_blocking_issue(normalized):
+        normalized["passed"] = False
+        passed = False
+    return normalized, passed
+
+
 def _build_reviewer_cache_payload(
     req: dict,
     fea: dict,
@@ -142,10 +185,11 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     )
     cached_review = load_cached_review(project_id, cache_payload)
     if cached_review is not None:
+        cached_review, passed = _normalize_review_passed(cached_review)
         return _apply_review_outcome(
             state,
             review_report=cached_review,
-            passed=bool(cached_review.get("passed")),
+            passed=passed,
         )
 
     compact_context = (
@@ -180,7 +224,6 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
-    review_report = structured.model_dump()
+    review_report, passed = _normalize_review_passed(structured.model_dump())
     save_cached_review(project_id, cache_payload, review_report)
-    passed = bool(review_report.get("passed"))
     return _apply_review_outcome(state, review_report, passed=passed)

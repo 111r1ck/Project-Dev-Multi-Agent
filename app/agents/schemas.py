@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class RequirementDoc(BaseModel):
@@ -18,11 +20,31 @@ class FeasibilityReport(BaseModel):
     mvp_scope: list[str] = Field(default_factory=list)
 
 
+class ArchitectureModule(BaseModel):
+    name: str
+    responsibilities: list[str] = Field(default_factory=list)
+    tasks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_responsibility(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "responsibilities" not in normalized and "responsibility" in normalized:
+            responsibility = normalized.pop("responsibility")
+            if isinstance(responsibility, list):
+                normalized["responsibilities"] = [str(item) for item in responsibility]
+            elif responsibility:
+                normalized["responsibilities"] = [str(responsibility)]
+        return normalized
+
+
 class ArchitecturePlan(BaseModel):
     architecture_style: str
     backend: list[str] = Field(default_factory=list)
     frontend: list[str] = Field(default_factory=list)
-    modules: list[dict] = Field(default_factory=list)
+    modules: list[ArchitectureModule] = Field(default_factory=list)
     data_entities: list[str] = Field(default_factory=list)
 
 

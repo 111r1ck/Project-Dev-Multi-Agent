@@ -1,5 +1,13 @@
-from app.agents.schemas import RequirementDoc
-from app.agents.schemas import PlannerOutput, PromptPackOutput, PromptTask, ReviewReport, TaskItem
+from app.agents.schemas import (
+    ArchitecturePlan,
+    PlannerOutput,
+    PromptPackOutput,
+    PromptTask,
+    RequirementDoc,
+    ReviewReport,
+    TaskItem,
+)
+from app.graph.nodes.architect import architect_node
 from app.graph.nodes.planner import planner_node
 from app.graph.nodes.prompt_builder import prompt_builder_node
 from app.graph.nodes.requirement_analyst import requirement_analyst_node
@@ -12,6 +20,25 @@ class FakeRequirementAgent:
             "structured_response": RequirementDoc(
                 project_name="demo",
                 summary="summary",
+            )
+        }
+
+
+class FakeArchitectAgent:
+    def invoke(self, _payload):
+        return {
+            "structured_response": ArchitecturePlan(
+                architecture_style="标准前后端分离的模块化单体 (Client-Side Only SPA)",
+                backend=[],
+                frontend=["React", "IndexedDB"],
+                modules=[
+                    {
+                        "name": "日志审计模块",
+                        "responsibility": "记录关键操作日志并支持审计回溯。",
+                        "tasks": ["设计日志表结构"],
+                    }
+                ],
+                data_entities=["OperationLog"],
             )
         }
 
@@ -31,6 +58,35 @@ def test_requirement_node_smoke(monkeypatch):
     result = requirement_analyst_node(state)
     assert "requirement_doc" in result
     assert result["next_step"] == "feasibility_analyst"
+
+
+def test_architect_normalizes_client_side_style_and_module_responsibilities(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.architect.build_architect_agent",
+        lambda: FakeArchitectAgent(),
+    )
+    state = {
+        "requirement_doc": {
+            "summary": "开发个人知识库Web，支持本地JSON导入导出与日志记录。",
+            "roles": ["个人用户"],
+            "modules": ["笔记", "复习", "日志"],
+            "constraints": ["本地数据导入导出"],
+        },
+        "feasibility_report": {
+            "feasible": True,
+            "complexity": "M",
+            "risks": [],
+            "mvp_scope": [],
+        },
+    }
+
+    result = architect_node(state)
+    plan = result["architecture_plan"]
+
+    assert "前后端分离" not in plan["architecture_style"]
+    assert "Client-Side Only SPA" in plan["architecture_style"]
+    assert plan["modules"][0]["responsibilities"] == ["记录关键操作日志并支持审计回溯。"]
+    assert "responsibility" not in plan["modules"][0]
 
 
 class FakePlannerAgent:
@@ -107,6 +163,53 @@ def test_planner_auto_fill_required_tasks(monkeypatch):
     assert "基础项目初始化" in titles
 
 
+def test_planner_adds_hard_requirement_guardrail_tasks(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {
+            "summary": "仓储库存管理Web，支持商品入库出库、库存查询、本地JSON导入导出与关键操作日志。",
+            "modules": ["库存管理", "查询筛选", "导入导出", "日志"],
+            "constraints": [
+                "10万条库存流水规模下查询响应时间不超过1秒",
+                "入库、出库、盘点调整均有可追踪日志记录",
+                "本地数据导入导出JSON",
+            ],
+        },
+        "architecture_plan": {
+            "architecture_style": "本地优先的模块化前端单体架构 (Client-Side Only SPA)",
+            "backend": [],
+            "frontend": ["IndexedDB", "FlexSearch"],
+            "modules": [
+                {
+                    "name": "日志审计模块",
+                    "responsibilities": ["记录关键操作日志", "支持导出回溯"],
+                }
+            ],
+        },
+        "review_report": {},
+        "review_rounds": 0,
+        "project_decisions": {},
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+    guardrail_text = " ".join(
+        f"{item.get('title', '')} {item.get('description', '')}"
+        for item in result["task_breakdown"]
+        if item.get("title") != "基础项目初始化"
+    )
+
+    assert "设计核心数据模型与持久化方案" in titles
+    assert "建立关键路径延迟基准与性能回归检测" in titles
+    assert "完善权限隔离、审计与合规控制" in titles
+    assert "笔记" not in guardrail_text
+    assert "标签" not in guardrail_text
+    assert "复习" not in guardrail_text
+
+
 def test_planner_auto_fill_missing_tasks_from_review(monkeypatch):
     monkeypatch.setattr(
         "app.graph.nodes.planner.build_planner_agent",
@@ -177,6 +280,14 @@ def test_prompt_builder_aligns_and_fills(monkeypatch):
         "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
         lambda: FakePromptBuilderAgent(),
     )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        lambda _project_id, _review_rounds, tasks: ([None] * len(tasks), list(range(len(tasks)))),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
     state = {
         "task_breakdown": [
             {
@@ -209,6 +320,8 @@ def test_prompt_builder_aligns_and_fills(monkeypatch):
 
 def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "app.graph.nodes.reviewer.build_reviewer_agent",
         lambda: fake,
@@ -240,6 +353,8 @@ def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
 
 def test_reviewer_calls_llm_when_blocking_issue_is_covered(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "app.graph.nodes.reviewer.build_reviewer_agent",
         lambda: fake,
@@ -271,3 +386,47 @@ def test_reviewer_calls_llm_when_blocking_issue_is_covered(monkeypatch):
     assert result["next_step"] == "finish"
     assert result["review_report"]["passed"] is True
     assert fake.calls == 1
+
+
+def test_reviewer_forces_rework_when_passed_report_contains_blocking_issues(monkeypatch):
+    class ContradictoryReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=True,
+                    issues=[
+                        "性能验证方案缺失：任务缺少1万条数据的测试数据集准备与性能基准测试用例。",
+                        "纯前端架构的日志持久化风险：需明确日志是否需要导出为JSON。",
+                    ],
+                    suggestions=["补充性能测试用例"],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: ContradictoryReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {
+            "summary": "个人知识库Web",
+            "constraints": ["1万条笔记搜索响应时间不超过1秒"],
+        },
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "Client-Side Only SPA", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "开发全文检索功能", "description": "desc", "priority": "P1", "depends_on": []}
+        ],
+        "prompt_pack": [{"task_title": "开发全文检索功能", "coding_prompt": "a", "test_prompt": "b"}],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+
+    assert result["next_step"] == "planner"
+    assert result["review_rounds"] == 1
+    assert result["review_report"]["passed"] is False

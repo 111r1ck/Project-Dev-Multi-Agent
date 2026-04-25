@@ -3,6 +3,17 @@ from app.graph.nodes.common import compact_json, extract_structured_response
 from app.graph.state import ProjectState
 
 
+def _normalize_architecture_plan(plan: dict) -> dict:
+    backend = plan.get("backend", []) or []
+    style = str(plan.get("architecture_style", "") or "")
+    if not backend and "前后端分离" in style:
+        if "Client-Side Only SPA" in style:
+            plan["architecture_style"] = "本地优先的模块化前端单体架构 (Client-Side Only SPA)"
+        else:
+            plan["architecture_style"] = style.replace("前后端分离", "纯前端").strip()
+    return plan
+
+
 def architect_node(state: ProjectState) -> ProjectState:
     req = state["requirement_doc"]
     fea = state["feasibility_report"]
@@ -29,9 +40,10 @@ def architect_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
+    plan = _normalize_architecture_plan(structured.model_dump())
 
     return {
         **state,
-        "architecture_plan": structured.model_dump(),
+        "architecture_plan": plan,
         "next_step": "planner",
     }

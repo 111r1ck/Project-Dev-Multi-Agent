@@ -14,6 +14,7 @@ class ProjectState(TypedDict, total=False):
     prompt_pack: list[dict[str, Any]]
     review_report: dict[str, Any]
     human_feedback_notes: list[Any]
+    project_decisions: dict[str, Any]
     human_rounds: int
     max_human_rounds: int
     review_rounds: int

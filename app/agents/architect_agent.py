@@ -18,11 +18,12 @@ def build_architect_agent():
             "设计原则："
             "优先模块化单体+清晰边界，必要时再预留拆分点；"
             "每个模块必须有明确职责，不要重复或交叉失控；"
+            "architecture_style 必须与 backend/frontend 字段一致，backend 为空时不得写“前后端分离”；"
             "架构选择应与已知约束一致（并发、成本、合规、团队能力）；"
             "对未决信息采用保守默认策略，并显式体现在方案中。"
             "输出要求："
             "必须严格遵循schema；"
-            "modules 字段需可用于直接任务拆解；"
+            "modules 字段需可用于直接任务拆解，每个模块必须包含 responsibilities 列表；"
             "不输出与MVP无关的大规模远期设计。"
         ),
         response_format=ArchitecturePlan,

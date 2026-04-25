@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from app.services.constraint_classifier import ConstraintSignal
+
+
+_GUARDRAIL_TASKS: dict[str, dict] = {
+    "availability": {
+        "title": "设计可用性目标分解与故障恢复方案",
+        "description": "将服务等级目标拆解为健康检查、故障检测、恢复流程、备份恢复和演练验收，确保可用性约束可执行、可验证。",
+        "priority": "P0",
+        "owner_role": "架构师",
+    },
+    "capacity": {
+        "title": "建立容量模型与负载基准测试",
+        "description": "基于已确认的规模、吞吐或峰值负载约束，建立容量模型、测试数据、压测脚本、资源基线和回归阈值。",
+        "priority": "P0",
+        "owner_role": "测试工程师",
+    },
+    "latency": {
+        "title": "建立关键路径延迟基准与性能回归检测",
+        "description": "识别关键路径并定义响应时间、分位延迟、超时和退化阈值，纳入自动化性能回归检测。",
+        "priority": "P0",
+        "owner_role": "测试工程师",
+    },
+    "resilience": {
+        "title": "实现限流降级、重试补偿与故障演练方案",
+        "description": "为关键路径设计限流、降级、熔断、重试、补偿和故障演练机制，明确触发条件、上限和人工介入边界。",
+        "priority": "P0",
+        "owner_role": "后端开发工程师",
+    },
+    "scalability": {
+        "title": "设计扩展策略与资源弹性预案",
+        "description": "定义水平扩展、资源弹性、分片或多实例策略，明确扩展触发条件、容量水位和回退方案。",
+        "priority": "P1",
+        "owner_role": "架构师",
+    },
+    "consistency": {
+        "title": "设计幂等、状态机、补偿与一致性校验机制",
+        "description": "梳理关键写操作和异步流程，定义幂等键、状态流转、补偿动作、重试边界和一致性校验任务。",
+        "priority": "P0",
+        "owner_role": "后端开发工程师",
+    },
+    "security_compliance": {
+        "title": "完善权限隔离、审计与合规控制",
+        "description": "定义访问控制、数据隔离、审计字段、敏感操作留痕和合规验证要求，防止越权和不可追踪操作。",
+        "priority": "P0",
+        "owner_role": "安全工程师",
+    },
+    "observability": {
+        "title": "建立指标采集、告警与日志追踪体系",
+        "description": "定义业务与技术指标、告警规则、日志聚合、链路追踪和看板验收，支撑运行态问题定位。",
+        "priority": "P0",
+        "owner_role": "运维工程师",
+    },
+    "release_safety": {
+        "title": "制定灰度发布、回滚与变更验证机制",
+        "description": "设计发布批次、流量切换、健康检查、自动/手动回滚和变更后验证流程，降低上线风险。",
+        "priority": "P1",
+        "owner_role": "DevOps工程师",
+    },
+    "data_governance": {
+        "title": "设计核心数据模型与持久化方案",
+        "description": "定义核心业务实体、关系、持久化结构、导入导出或迁移边界，并明确备份、恢复、归档和数据保留策略。",
+        "priority": "P1",
+        "owner_role": "数据工程师",
+    },
+}
+
+
+def _task_text(task: dict) -> str:
+    return f"{task.get('title', '')} {task.get('description', '')}"
+
+
+def _already_covered(tasks: list[dict], title: str) -> bool:
+    return any(title == str(task.get("title", "")).strip() for task in tasks)
+
+
+def ensure_guardrail_tasks(
+    tasks: list[dict],
+    signals: list[ConstraintSignal],
+) -> list[dict]:
+    normalized = list(tasks)
+    categories = {signal.category for signal in signals}
+    for category in categories:
+        template = _GUARDRAIL_TASKS.get(category)
+        if not template or _already_covered(normalized, template["title"]):
+            continue
+        normalized.append({**template, "depends_on": []})
+    return normalized

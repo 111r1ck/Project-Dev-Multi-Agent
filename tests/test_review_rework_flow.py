@@ -74,6 +74,14 @@ def test_prompt_builder_includes_review_feedback_on_rework(monkeypatch):
         "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
         lambda: FakePromptAgent(),
     )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        lambda _project_id, _review_rounds, tasks: ([None] * len(tasks), list(range(len(tasks)))),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
 
     state = {
         "task_breakdown": [
@@ -92,4 +100,3 @@ def test_prompt_builder_includes_review_feedback_on_rework(monkeypatch):
     assert result["next_step"] == "reviewer"
     assert "回流修复模式" in captured["content"]
     assert "读写分离风险未覆盖" in captured["content"]
-
