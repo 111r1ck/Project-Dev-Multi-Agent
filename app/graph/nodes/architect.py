@@ -17,6 +17,7 @@ def _normalize_architecture_plan(plan: dict) -> dict:
 def architect_node(state: ProjectState) -> ProjectState:
     req = state["requirement_doc"]
     fea = state["feasibility_report"]
+    assumption_pack = state.get("assumption_pack", {})
     compact_context = (
         "请基于以下摘要生成架构方案。\n"
         f"需求摘要: {req.get('summary', '')}\n"
@@ -25,7 +26,10 @@ def architect_node(state: ProjectState) -> ProjectState:
         f"约束: {compact_json(req.get('constraints', []), max_chars=1200)}\n"
         f"可行性: feasible={fea.get('feasible')} complexity={fea.get('complexity')}\n"
         f"主要风险: {compact_json(fea.get('risks', [])[:5], max_chars=1200)}\n"
-        f"MVP范围: {compact_json(fea.get('mvp_scope', [])[:8], max_chars=1200)}"
+        f"MVP范围: {compact_json(fea.get('mvp_scope', [])[:8], max_chars=1200)}\n"
+        f"受控假设包: {compact_json(assumption_pack, max_chars=1600)}\n"
+        "若存在受控假设，请不要把假设写成用户硬约束；"
+        "请体现风险控制和扩展点，并避免将后置范围纳入MVP架构。"
     )
 
     agent = build_architect_agent()

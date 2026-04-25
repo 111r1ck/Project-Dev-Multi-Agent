@@ -93,6 +93,45 @@ def _normalize_review_passed(review_report: dict) -> tuple[dict, bool]:
     return normalized, passed
 
 
+def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> dict | None:
+    if not assumption_pack or not assumption_pack.get("human_gate_exhausted"):
+        return None
+    issues: list[str] = []
+    suggestions: list[str] = []
+
+    blocking = [str(item) for item in (assumption_pack.get("blocking", []) or [])]
+    if blocking:
+        issues.append("人工补充上限后仍存在阻塞信息，不能仅依赖受控假设继续。")
+        issues.extend(blocking[:5])
+
+    task_text = " ".join(
+        f"{item.get('title', '')} {item.get('description', '')}" for item in (tasks or [])
+    )
+    if assumption_pack.get("assumptions") and "验证关键假设" not in task_text:
+        issues.append("受控假设缺少验证任务，无法证明假设可接受。")
+        suggestions.append("请补充“验证关键假设与替代方案”任务。")
+    if assumption_pack.get("risk_controls") and "风险控制" not in task_text:
+        issues.append("受控假设缺少风险控制落地任务。")
+        suggestions.append("请补充降级、重试、人工兜底、观测指标等风险控制任务。")
+    if assumption_pack.get("requires_user_confirmation") and "确认" not in task_text:
+        issues.append("上线前需确认事项未形成确认清单任务。")
+        suggestions.append("请补充“上线前确认清单与决策复核”任务。")
+
+    deferred = [str(item) for item in (assumption_pack.get("deferred_scope", []) or [])]
+    leaked = [item for item in deferred if item and item in task_text]
+    if leaked:
+        issues.append("已后置范围仍出现在MVP任务中。")
+        issues.extend(leaked[:5])
+
+    if not issues:
+        return None
+    return {
+        "passed": False,
+        "issues": ["受控假设审核未通过："] + issues,
+        "suggestions": suggestions or ["请补齐假设验证、风险控制与上线前确认任务。"],
+    }
+
+
 def _build_reviewer_cache_payload(
     req: dict,
     fea: dict,
@@ -152,6 +191,13 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     prompts = state.get("prompt_pack", [])
     review_rounds = int(state.get("review_rounds", 0) or 0)
     previous_review = state.get("review_report", {}) or {}
+
+    assumption_review = _build_assumption_pack_review(
+        state.get("assumption_pack", {}),
+        tasks,
+    )
+    if assumption_review is not None:
+        return _apply_review_outcome(state, assumption_review, passed=False)
 
     # Gate before reviewer LLM call:
     # key blocking issues from previous review must be covered by current tasks.

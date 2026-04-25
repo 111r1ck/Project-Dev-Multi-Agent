@@ -9,7 +9,10 @@ from app.graph.nodes.common import (
 )
 from app.graph.state import ProjectState
 from app.services.constraint_classifier import classify_constraints
-from app.services.planning_guardrails import ensure_guardrail_tasks
+from app.services.planning_guardrails import (
+    apply_assumption_pack_tasks,
+    ensure_guardrail_tasks,
+)
 from app.services.task_dependency_resolver import resolve_task_dependencies
 
 
@@ -138,7 +141,8 @@ def planner_node(state: ProjectState) -> ProjectState:
         f"后端技术: {compact_json((arch.get('backend', []) or [])[:8], max_chars=600)}\n"
         f"前端技术: {compact_json((arch.get('frontend', []) or [])[:8], max_chars=600)}\n"
         f"核心模块: {compact_json(modules, max_chars=1600)}\n"
-        f"人工确认决策: {compact_json(state.get('project_decisions', {}), max_chars=1600)}"
+        f"人工确认决策: {compact_json(state.get('project_decisions', {}), max_chars=1600)}\n"
+        f"受控假设包: {compact_json(state.get('assumption_pack', {}), max_chars=1600)}"
     )
 
     review_rounds = int(state.get("review_rounds", 0) or 0)
@@ -178,6 +182,7 @@ def planner_node(state: ProjectState) -> ProjectState:
         review_report=review_report,
     )
     tasks = ensure_guardrail_tasks(tasks, signals)
+    tasks = apply_assumption_pack_tasks(tasks, state.get("assumption_pack", {}))
     tasks = _ensure_missing_tasks_from_review(tasks, review_report)
     tasks = resolve_task_dependencies(tasks)
 

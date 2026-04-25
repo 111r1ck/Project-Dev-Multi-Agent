@@ -87,3 +87,62 @@ def ensure_guardrail_tasks(
             continue
         normalized.append({**template, "depends_on": []})
     return normalized
+
+
+def apply_assumption_pack_tasks(
+    tasks: list[dict],
+    assumption_pack: dict,
+) -> list[dict]:
+    normalized = list(tasks)
+    if not assumption_pack or not assumption_pack.get("human_gate_exhausted"):
+        return normalized
+
+    deferred = [str(item) for item in (assumption_pack.get("deferred_scope", []) or [])]
+    if deferred:
+        filtered: list[dict] = []
+        for task in normalized:
+            text = f"{task.get('title', '')} {task.get('description', '')}"
+            if any(item and item in text for item in deferred):
+                continue
+            filtered.append(task)
+        normalized = filtered
+
+    if assumption_pack.get("assumptions"):
+        if not _already_covered(normalized, "验证关键假设与替代方案"):
+            normalized.append(
+                {
+                    "title": "验证关键假设与替代方案",
+                    "description": "针对人工补充上限后采用的保守假设，验证替代实现、mock方案、降级路径和验收边界。",
+                    "priority": "P0",
+                    "depends_on": [],
+                    "owner_role": "架构师",
+                }
+            )
+
+    if assumption_pack.get("risk_controls"):
+        if not _already_covered(normalized, "落实受控假设的风险控制措施"):
+            normalized.append(
+                {
+                    "title": "落实受控假设的风险控制措施",
+                    "description": "为受控假设补齐超时重试、降级、人工兜底、观测指标和异常处置边界。",
+                    "priority": "P0",
+                    "depends_on": ["验证关键假设与替代方案"]
+                    if _already_covered(normalized, "验证关键假设与替代方案")
+                    else [],
+                    "owner_role": "后端开发工程师",
+                }
+            )
+
+    if assumption_pack.get("requires_user_confirmation"):
+        if not _already_covered(normalized, "上线前确认清单与决策复核"):
+            normalized.append(
+                {
+                    "title": "上线前确认清单与决策复核",
+                    "description": "汇总上线前必须确认的假设、外部依赖、后置范围和人工决策，形成可签核清单。",
+                    "priority": "P0",
+                    "depends_on": [],
+                    "owner_role": "产品经理",
+                }
+            )
+
+    return normalized

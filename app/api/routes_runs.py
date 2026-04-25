@@ -114,6 +114,7 @@ async def run_project_analysis(
             "raw_requirement": req.raw_requirement,
             "human_feedback_notes": [],
             "project_decisions": {},
+            "assumption_pack": {},
             "errors": [],
             "need_human": False,
             "human_rounds": 0,
