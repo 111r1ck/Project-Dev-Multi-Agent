@@ -1,4 +1,7 @@
-from app.services.missing_info_resolver import build_assumption_pack
+from app.services.missing_info_resolver import (
+    build_assumption_pack,
+    classify_missing_info_levels,
+)
 
 
 def test_build_assumption_pack_classifies_missing_info_generically():
@@ -35,6 +38,9 @@ def test_build_assumption_pack_marks_confirmation_for_non_blocking_items():
     assert pack["blocking"] == []
     assert pack["requires_user_confirmation"]
     assert pack["requires_user_confirmation"][0]["item"] == "第三方接口文档未提供"
+    assert pack["conditional_pass_ready"] is True
+    assert pack["coverage_map"][0]["missing_info"] == "第三方接口文档未提供"
+    assert pack["prelaunch_checklist"][0]["status"] == "pending"
 
 
 def test_build_assumption_pack_does_not_defer_high_level_capability_by_wording_only():
@@ -66,3 +72,18 @@ def test_build_assumption_pack_converts_blocking_info_to_scope_reduction():
     assert pack["scope_reductions"][0]["missing_info"] == "核心外部依赖协议未明确"
     assert "替代方案" in pack["scope_reductions"][0]["action"]
     assert pack["requires_user_confirmation"][0]["phase"] == "架构评审前确认"
+    assert pack["conditional_pass_ready"] is False
+
+
+def test_classify_missing_info_levels():
+    levels = classify_missing_info_levels(
+        [
+            "核心身份认证方式尚未确定",
+            "外部服务接口服务等级未明确",
+            "后续增强报表口径未确认",
+        ]
+    )
+
+    assert levels["must_confirm"] == ["核心身份认证方式尚未确定"]
+    assert levels["assumable"] == ["外部服务接口服务等级未明确"]
+    assert levels["deferred"] == ["后续增强报表口径未确认"]

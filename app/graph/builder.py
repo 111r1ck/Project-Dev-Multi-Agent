@@ -81,6 +81,7 @@ def build_graph():
         next_route,
         {
             "planner": "planner",
+            "prompt_builder": "prompt_builder",
             "finish": END,
         },
     )

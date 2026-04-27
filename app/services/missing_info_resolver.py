@@ -33,6 +33,24 @@ def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     return any(hint.lower() in normalized for hint in hints)
 
 
+def classify_missing_info_levels(missing_info: list[Any]) -> dict[str, list[str]]:
+    unresolved = [str(item) for item in (missing_info or []) if str(item).strip()]
+    levels = {
+        "must_confirm": [],
+        "assumable": [],
+        "deferred": [],
+    }
+    for item in unresolved:
+        if _contains_any(item, _BLOCKING_HINTS):
+            levels["must_confirm"].append(item)
+            continue
+        if _contains_any(item, _DEFERRABLE_HINTS):
+            levels["deferred"].append(item)
+            continue
+        levels["assumable"].append(item)
+    return levels
+
+
 def build_assumption_pack(
     *,
     missing_info: list[Any],
@@ -41,15 +59,20 @@ def build_assumption_pack(
     human_feedback_notes: list[Any] | None,
 ) -> dict[str, Any]:
     unresolved = [str(item) for item in (missing_info or []) if str(item).strip()]
+    levels = classify_missing_info_levels(unresolved)
     pack = {
         "human_gate_exhausted": True,
         "unresolved_missing_info": unresolved,
+        "missing_info_levels": levels,
         "blocking": [],
         "scope_reductions": [],
         "assumptions": [],
         "risk_controls": [],
         "deferred_scope": [],
         "requires_user_confirmation": [],
+        "coverage_map": [],
+        "prelaunch_checklist": [],
+        "conditional_pass_ready": False,
     }
 
     for item in unresolved:
@@ -92,5 +115,31 @@ def build_assumption_pack(
         pack["requires_user_confirmation"].append(
             {"item": item, "phase": "上线前确认"}
         )
+
+    coverage_map = []
+    for item in unresolved:
+        coverage_map.append(
+            {
+                "missing_info": item,
+                "has_assumption": any(a.get("source") == item for a in pack["assumptions"]),
+                "has_risk_control": any(r.get("missing_info") == item for r in pack["risk_controls"]),
+                "needs_user_confirmation": any(c.get("item") == item for c in pack["requires_user_confirmation"]),
+                "is_blocking": item in pack["blocking"],
+            }
+        )
+    pack["coverage_map"] = coverage_map
+    pack["prelaunch_checklist"] = [
+        {
+            "item": c.get("item", ""),
+            "phase": c.get("phase", "上线前确认"),
+            "status": "pending",
+        }
+        for c in pack["requires_user_confirmation"]
+    ]
+    pack["conditional_pass_ready"] = (
+        not bool(pack["blocking"])
+        and bool(pack["risk_controls"] or pack["assumptions"])
+        and bool(pack["requires_user_confirmation"])
+    )
 
     return pack

@@ -794,6 +794,7 @@
     (function () {
       let loading = false;
       let loadingCount = 0;
+      let executionInProgress = false;
       const $ = (id) => document.getElementById(id);
 
       const projectId = $("projectId");
@@ -887,6 +888,24 @@
         return pid;
       }
 
+      function refreshActionButtons() {
+        const workflowLocked = loading || executionInProgress;
+        const infoRefreshLocked = loading && !executionInProgress;
+        runBtn.disabled = workflowLocked;
+        continueBtn.disabled = workflowLocked;
+        resumeBtn.disabled = workflowLocked;
+        stateBtn.disabled = infoRefreshLocked;
+        historyBtn.disabled = infoRefreshLocked;
+        hydrateResultBtn.disabled = infoRefreshLocked;
+        purgeBtn.disabled = loading;
+        genProjectIdBtn.disabled = loading;
+        agentLoadBtn.disabled = loading;
+        agentSaveBtn.disabled = loading;
+        persistEnvBtn.disabled = loading;
+        secretToggleBtn.disabled = loading;
+        loadMissingBtn.disabled = loading;
+      }
+
       function setLoading(v) {
         if (v) {
           loadingCount += 1;
@@ -894,20 +913,7 @@
           loadingCount = Math.max(0, loadingCount - 1);
         }
         loading = loadingCount > 0;
-
-        runBtn.disabled = loading;
-        continueBtn.disabled = loading;
-        stateBtn.disabled = loading;
-        historyBtn.disabled = loading;
-        hydrateResultBtn.disabled = loading;
-        purgeBtn.disabled = loading;
-        genProjectIdBtn.disabled = loading;
-        agentLoadBtn.disabled = loading;
-        agentSaveBtn.disabled = loading;
-        persistEnvBtn.disabled = loading;
-        secretToggleBtn.disabled = loading;
-        resumeBtn.disabled = loading;
-        loadMissingBtn.disabled = loading;
+        refreshActionButtons();
       }
 
       function switchView(viewName) {
@@ -1024,9 +1030,19 @@
         resultSummaryPre.textContent = pretty(buildResultSummary(data));
         resultPre.textContent = pretty(data);
         const status = data && data.status ? String(data.status) : "";
+        if (status === "in_progress") {
+          executionInProgress = true;
+        }
+        if (status === "completed" || status === "interrupted" || status === "loaded" || status === "error") {
+          executionInProgress = false;
+        }
+        if (data && data.error) {
+          executionInProgress = false;
+        }
         statusTag.textContent = status;
         statusTag.className = "status";
         if (status) statusTag.classList.add(status);
+        refreshActionButtons();
         renderCompletedSections(data);
         if (status === "interrupted") {
           const missing = extractMissingFields(data);
@@ -1187,12 +1203,21 @@
 
       function buildStateSummary(data) {
         if (!data) return {};
+        const continueStatus = data.continue_status && typeof data.continue_status === "object"
+          ? data.continue_status
+          : {};
         return {
           project_id: data.project_id || null,
           checkpoint_id: data.checkpoint_id || null,
           next: Array.isArray(data.next) ? data.next : [],
           created_at: data.created_at || null,
           metadata_step: data.metadata && data.metadata.step ? data.metadata.step : null,
+          continue_alive: !!data.continue_alive,
+          continue_status: continueStatus.status || null,
+          continue_error: continueStatus.error || null,
+          continue_started_at: continueStatus.started_at || null,
+          continue_finished_at: continueStatus.finished_at || null,
+          continue_latest_checkpoint_id: continueStatus.latest_checkpoint_id || null,
           has_values: !!(data.values && Object.keys(data.values).length),
           values_keys: data.values ? Object.keys(data.values) : []
         };
@@ -1211,6 +1236,22 @@
           count: data.count || 0,
           latest_5: rows
         };
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      function hasCompletedArtifacts(values) {
+        const completedKeys = [
+          "requirement_doc",
+          "feasibility_report",
+          "architecture_plan",
+          "task_breakdown",
+          "prompt_pack",
+          "review_report"
+        ];
+        return completedKeys.every((k) => Object.prototype.hasOwnProperty.call(values || {}, k));
       }
 
       async function callApi(url, options) {
@@ -1281,21 +1322,18 @@
         statePre.textContent = pretty(snapshot);
 
         const values = snapshot && snapshot.values ? snapshot.values : {};
-        const completedKeys = [
-          "requirement_doc",
-          "feasibility_report",
-          "architecture_plan",
-          "task_breakdown",
-          "prompt_pack",
-          "review_report"
-        ];
-        const hasCompletedResult = completedKeys.every((k) =>
-          Object.prototype.hasOwnProperty.call(values, k)
-        );
+        const hasCompletedResult = hasCompletedArtifacts(values);
 
         if (hasCompletedResult && Array.isArray(snapshot.next) && snapshot.next.length === 0) {
           const rebuiltResult = {};
-          completedKeys.forEach((k) => {
+          [
+            "requirement_doc",
+            "feasibility_report",
+            "architecture_plan",
+            "task_breakdown",
+            "prompt_pack",
+            "review_report"
+          ].forEach((k) => {
             rebuiltResult[k] = values[k];
           });
           setResult({
@@ -1338,6 +1376,21 @@
           state: values,
           source: "state_snapshot"
         });
+      }
+
+      async function pollAfterContinue(projectIdValue, maxAttempts = 8, intervalMs = 1200) {
+        const encodedProjectId = encodeURIComponent(projectIdValue);
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          await sleep(intervalMs);
+          await hydrateResultFromState();
+          const snapshot = await callApi("/runs/" + encodedProjectId + "/state");
+          const values = snapshot && snapshot.values ? snapshot.values : {};
+          const next = Array.isArray(snapshot.next) ? snapshot.next : [];
+          const hasInterrupt = Array.isArray(values.__interrupt__) && values.__interrupt__.length > 0;
+          if (hasInterrupt || (next.length === 0 && hasCompletedArtifacts(values))) {
+            break;
+          }
+        }
       }
 
       runBtn.addEventListener("click", async function () {
@@ -1390,6 +1443,10 @@
           setResult(data);
           await loadState();
           await loadHistory();
+          if (data && data.status === "in_progress") {
+            await pollAfterContinue(pidRaw);
+            await loadHistory();
+          }
         } catch (err) {
           setResult({ error: String(err) });
         } finally {
@@ -1597,6 +1654,7 @@
       loadHistory().catch(function () {});
       setSecretInputMode(false);
       updateProviderFieldsVisibility(cfgProvider.value || "openai");
+      refreshActionButtons();
     })();
   </script>
 </body>

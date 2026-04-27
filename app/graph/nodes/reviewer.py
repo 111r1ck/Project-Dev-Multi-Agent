@@ -13,6 +13,90 @@ from app.graph.state import ProjectState
 from app.services.reviewer_cache import load_cached_review, save_cached_review
 
 
+def _is_prompt_quality_only_review(review_report: dict) -> bool:
+    if not isinstance(review_report, dict):
+        return False
+    issues = [str(item) for item in (review_report.get("issues", []) or [])]
+    if not issues:
+        return False
+    prompt_markers = (
+        "提示词",
+        "prompt",
+        "编码提示",
+        "测试提示",
+        "兜底提示",
+    )
+    blocking_markers = (
+        "阻塞",
+        "关键功能缺失",
+        "架构冲突",
+        "数据丢失",
+        "合规",
+        "性能验证",
+    )
+    has_prompt_issue = any(
+        any(marker.lower() in issue.lower() for marker in prompt_markers)
+        for issue in issues
+    )
+    has_non_prompt_blocking = any(
+        any(marker.lower() in issue.lower() for marker in blocking_markers)
+        for issue in issues
+    )
+    return has_prompt_issue and not has_non_prompt_blocking
+
+
+def _is_coverage_only_issue(issue: str) -> bool:
+    text = str(issue or "")
+    markers = (
+        "回流覆盖检查未通过",
+        "尚未被任务清单命中",
+        "显式包含阻塞项关键词",
+        "补充依赖关系与验收标准",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _build_conditional_pass_if_possible(
+    state: ProjectState,
+    review_report: dict,
+) -> dict | None:
+    assumption_pack = state.get("assumption_pack", {}) or {}
+    if not assumption_pack.get("human_gate_exhausted"):
+        return None
+    if assumption_pack.get("blocking"):
+        return None
+
+    issues = [str(item) for item in (review_report.get("issues", []) or [])]
+    if not issues or not all(_is_coverage_only_issue(issue) for issue in issues):
+        return None
+
+    tasks = state.get("task_breakdown", []) or []
+    task_text = " ".join(f"{t.get('title', '')} {t.get('description', '')}" for t in tasks)
+    anchors = (
+        "验证关键假设与替代方案",
+        "落实受控假设的风险控制措施",
+        "上线前确认清单与决策复核",
+    )
+    covered_anchors = [anchor for anchor in anchors if anchor in task_text]
+    checklist = assumption_pack.get("prelaunch_checklist", []) or []
+    if len(covered_anchors) < 2 and not checklist:
+        return None
+
+    conditions = checklist or [
+        {"item": item.get("item", ""), "phase": item.get("phase", "上线前确认"), "status": "pending"}
+        for item in (assumption_pack.get("requires_user_confirmation", []) or [])
+    ]
+    return {
+        "passed": True,
+        "passed_with_conditions": True,
+        "conditions": conditions,
+        "issues": issues,
+        "suggestions": [
+            "已转为条件通过：请在上线前完成条件清单签核，并将未确认项保持在范围外。"
+        ],
+    }
+
+
 def _apply_review_outcome(
     state: ProjectState,
     review_report: dict,
@@ -30,6 +114,14 @@ def _apply_review_outcome(
 
     next_review_rounds = review_rounds + 1
     if next_review_rounds >= max_review_rounds:
+        conditional_pass = _build_conditional_pass_if_possible(state, review_report)
+        if conditional_pass is not None:
+            return {
+                **state,
+                "review_report": conditional_pass,
+                "review_rounds": next_review_rounds,
+                "next_step": "finish",
+            }
         errors = list(state.get("errors", []))
         errors.append(
             f"评审未通过，已达到最大复审轮次({max_review_rounds})，请根据review_report人工修正后再运行。"
@@ -46,7 +138,9 @@ def _apply_review_outcome(
         **state,
         "review_report": review_report,
         "review_rounds": next_review_rounds,
-        "next_step": "planner",
+        "next_step": "prompt_builder"
+        if _is_prompt_quality_only_review(review_report)
+        else "planner",
     }
 
 
@@ -115,7 +209,9 @@ def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> d
     if assumption_pack.get("risk_controls") and "风险控制" not in task_text:
         issues.append("受控假设缺少风险控制落地任务。")
         suggestions.append("请补充降级、重试、人工兜底、观测指标等风险控制任务。")
-    if assumption_pack.get("requires_user_confirmation") and "确认" not in task_text:
+    has_confirmation_task = "确认" in task_text
+    has_prelaunch_checklist = bool(assumption_pack.get("prelaunch_checklist"))
+    if assumption_pack.get("requires_user_confirmation") and not has_confirmation_task and not has_prelaunch_checklist:
         issues.append("上线前需确认事项未形成确认清单任务。")
         suggestions.append("请补充“上线前确认清单与决策复核”任务。")
     if blocking and has_scope_reduction and "范围收缩" not in task_text and "替代方案" not in task_text:

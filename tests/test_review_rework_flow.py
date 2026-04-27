@@ -1,6 +1,9 @@
 from app.agents.schemas import PlannerOutput, PromptPackOutput, PromptTask, TaskItem
 from app.graph.nodes.planner import planner_node
-from app.graph.nodes.prompt_builder import prompt_builder_node
+from app.graph.nodes.prompt_builder import (
+    _select_prompt_build_indices,
+    prompt_builder_node,
+)
 
 
 def test_planner_includes_review_feedback_on_rework(monkeypatch):
@@ -100,3 +103,89 @@ def test_prompt_builder_includes_review_feedback_on_rework(monkeypatch):
     assert result["next_step"] == "reviewer"
     assert "回流修复模式" in captured["content"]
     assert "读写分离风险未覆盖" in captured["content"]
+
+
+def test_prompt_builder_limits_generation_for_lower_priority_tasks():
+    tasks = [
+        {"title": "p0", "priority": "P0"},
+        {"title": "p1", "priority": "P1"},
+        {"title": "p2-a", "priority": "P2"},
+        {"title": "p2-b", "priority": "P2"},
+        {"title": "p2-c", "priority": "P2"},
+    ]
+    missing_indices = [0, 1, 2, 3, 4]
+
+    selected = _select_prompt_build_indices(
+        tasks,
+        missing_indices,
+        focus_indices=set(),
+    )
+    assert selected == [0, 1, 2, 3]
+
+
+def test_prompt_builder_rework_regenerates_focus_tasks_and_reuses_previous_cache(monkeypatch):
+    class FakePromptAgent:
+        def invoke(self, payload):
+            return {
+                "structured_response": PromptPackOutput(
+                    prompts=[
+                        PromptTask(
+                            task_title="t1",
+                            coding_prompt="new-cp-1",
+                            test_prompt="new-tp-1",
+                        )
+                    ]
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
+        lambda: FakePromptAgent(),
+    )
+
+    def fake_load_cached_prompts(_project_id, review_rounds, tasks):
+        if review_rounds == 1:
+            return ([None] * len(tasks), list(range(len(tasks))))
+        if review_rounds == 0:
+            return (
+                [
+                    {"task_title": "t1", "coding_prompt": "old-cp-1", "test_prompt": "old-tp-1"},
+                    {"task_title": "t2", "coding_prompt": "old-cp-2", "test_prompt": "old-tp-2"},
+                    {"task_title": "t3", "coding_prompt": "old-cp-3", "test_prompt": "old-tp-3"},
+                ],
+                [],
+            )
+        return ([None] * len(tasks), list(range(len(tasks))))
+
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        fake_load_cached_prompts,
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    state = {
+        "project_id": "demo-1",
+        "task_breakdown": [
+            {"title": "t1", "priority": "P1", "owner_role": "后端", "depends_on": []},
+            {"title": "t2", "priority": "P1", "owner_role": "后端", "depends_on": []},
+            {"title": "t3", "priority": "P2", "owner_role": "后端", "depends_on": []},
+        ],
+        "review_rounds": 1,
+        "review_report": {
+            "passed": False,
+            "issues": ["任务t1提示词缺少回归测试断言"],
+            "suggestions": [],
+        },
+        "next_step": "prompt_builder",
+    }
+
+    result = prompt_builder_node(state)
+    prompt_pack = result["prompt_pack"]
+    assert prompt_pack[0]["coding_prompt"] == "new-cp-1"
+    assert prompt_pack[1]["coding_prompt"] == "old-cp-2"
+    assert prompt_pack[2]["coding_prompt"] == "old-cp-3"
+    assert prompt_pack[1].get("is_fallback") is not True
+    assert prompt_pack[2].get("is_fallback") is not True

@@ -378,6 +378,107 @@ def test_planner_infers_priority_and_owner_from_review_text(monkeypatch):
     assert matched["owner_role"] == "测试工程师"
 
 
+def test_planner_adds_resource_protection_task_for_resource_exhaustion_risk(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {
+            "summary": "通用平台，支持数据导出与报表能力",
+            "modules": ["报表"],
+            "constraints": [],
+        },
+        "feasibility_report": {
+            "feasible": True,
+            "complexity": "H",
+            "risks": ["大数据量导出场景存在内存溢出与资源耗尽风险"],
+        },
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {},
+        "review_rounds": 0,
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+    assert "实现大结果集处理与资源保护机制" in titles
+
+
+def test_planner_does_not_add_resource_protection_task_when_already_covered(monkeypatch):
+    class CoveredPlannerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": PlannerOutput(
+                    tasks=[
+                        TaskItem(
+                            title="实现流式导出与异步任务处理",
+                            description="采用流式写入、分页分片与异步队列处理大结果集，控制内存水位。",
+                            priority="P0",
+                            depends_on=[],
+                            owner_role="后端开发工程师",
+                        )
+                    ]
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: CoveredPlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {"summary": "任意系统", "modules": [], "constraints": []},
+        "feasibility_report": {
+            "feasible": True,
+            "complexity": "H",
+            "risks": ["批量导出时可能出现OOM"],
+        },
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {},
+        "review_rounds": 0,
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+    assert titles.count("实现大结果集处理与资源保护机制") == 0
+
+
+def test_planner_adds_concurrency_guardrail_task_from_risk(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {"summary": "预约系统", "modules": [], "constraints": []},
+        "feasibility_report": {
+            "feasible": True,
+            "complexity": "M",
+            "risks": ["并发预订冲突需依靠数据库唯一索引或事务锁保证一致性"],
+        },
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {},
+        "review_rounds": 0,
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+    assert "设计并发冲突防护与唯一约束策略" in titles
+
+
 def test_prompt_builder_aligns_and_fills(monkeypatch):
     monkeypatch.setattr(
         "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
@@ -512,6 +613,53 @@ def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
     assert fake.calls == 0
 
 
+def test_reviewer_allows_conditional_pass_when_round_limit_reached_with_coverage_only_issues(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "test", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "验证关键假设与替代方案", "description": "验证假设", "priority": "P0", "depends_on": []},
+            {"title": "落实受控假设的风险控制措施", "description": "风险控制", "priority": "P0", "depends_on": []},
+        ],
+        "prompt_pack": [
+            {"task_title": "验证关键假设与替代方案", "coding_prompt": "a", "test_prompt": "b"},
+            {"task_title": "落实受控假设的风险控制措施", "coding_prompt": "a", "test_prompt": "b"},
+        ],
+        "assumption_pack": {
+            "human_gate_exhausted": True,
+            "blocking": [],
+            "prelaunch_checklist": [{"item": "外部依赖SLA确认", "phase": "上线前确认", "status": "pending"}],
+            "requires_user_confirmation": [{"item": "外部依赖SLA确认", "phase": "上线前确认"}],
+        },
+        "review_report": {
+            "passed": False,
+            "issues": [
+                "回流覆盖检查未通过：以下关键阻塞项尚未被任务清单命中。",
+                "建议在任务标题中显式包含阻塞项关键词，并补充依赖关系与验收标准。",
+            ],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["passed_with_conditions"] is True
+    assert result["review_report"]["conditions"][0]["item"] == "外部依赖SLA确认"
+    assert fake.calls == 0
+
+
 def test_reviewer_calls_llm_when_blocking_issue_is_covered(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
     monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
@@ -586,6 +734,45 @@ def test_reviewer_gate_accepts_semantic_coverage_for_data_retention(monkeypatch)
     assert fake.calls == 1
 
 
+def test_reviewer_gate_accepts_semantic_coverage_for_concurrency_constraints(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "预约平台", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "设计并发冲突防护与唯一约束策略",
+                "description": "为会议室ID+日期+时段建立组合唯一索引，并结合事务锁与幂等校验处理并发冲突。",
+                "priority": "P0",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [{"task_title": "设计并发冲突防护与唯一约束策略", "coding_prompt": "a", "test_prompt": "b"}],
+        "review_report": {
+            "passed": False,
+            "issues": [
+                "【并发控制方案不完整】并发预订冲突需依靠数据库唯一索引或事务锁，但任务列表未体现唯一索引设计。"
+            ],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+
+    assert result["review_report"]["passed"] is True
+    assert fake.calls == 1
+
+
 def test_reviewer_blocks_p0_fallback_prompts(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
     monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
@@ -622,7 +809,8 @@ def test_reviewer_blocks_p0_fallback_prompts(monkeypatch):
 
     result = reviewer_node(state)
 
-    assert result["next_step"] == "planner"
+    assert result["next_step"] == "prompt_builder"
+    assert result["review_rounds"] == 1
     assert result["review_report"]["passed"] is False
     assert "P0任务使用了兜底提示词" in result["review_report"]["issues"][0]
     assert fake.calls == 0

@@ -2,7 +2,10 @@ from app.agents.feasibility_agent import build_feasibility_agent
 from app.config import settings
 from app.graph.nodes.common import extract_structured_response
 from app.graph.state import ProjectState
-from app.services.missing_info_resolver import build_assumption_pack
+from app.services.missing_info_resolver import (
+    build_assumption_pack,
+    classify_missing_info_levels,
+)
 
 
 def feasibility_analyst_node(state: ProjectState) -> ProjectState:
@@ -15,7 +18,16 @@ def feasibility_analyst_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
-    need_human_raw = (not structured.feasible) or len(structured.missing_info) >= 3
+    levels = classify_missing_info_levels(structured.missing_info)
+    must_confirm_count = len(levels.get("must_confirm", []))
+    complexity = str(getattr(structured, "complexity", "") or "").strip().lower()
+    simple_complexity_markers = {"low", "simple", "s", "小", "低"}
+    is_simple_case = complexity in simple_complexity_markers
+    need_human_raw = (
+        (not structured.feasible)
+        or must_confirm_count > 0
+        or (len(structured.missing_info) >= 6 and not is_simple_case)
+    )
     human_rounds = state.get("human_rounds")
     if human_rounds is None:
         human_rounds = str(state.get("raw_requirement", "")).count("[人工补充]")

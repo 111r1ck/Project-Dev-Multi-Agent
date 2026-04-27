@@ -1,3 +1,5 @@
+import re
+
 from app.agents.prompt_builder_agent import build_prompt_builder_agent
 from app.graph.nodes.common import (
     extract_structured_response,
@@ -9,6 +11,8 @@ from app.services.prompt_cache import load_cached_prompts, save_cached_prompts
 
 
 PROMPT_BUILD_BATCH_SIZE = 8
+PROMPT_BUILD_MAX_TOTAL = 14
+PROMPT_BUILD_MAX_P2 = 2
 
 
 def _build_fallback_prompt(task: dict) -> dict:
@@ -69,19 +73,115 @@ def _align_prompt_pack_to_tasks(
     return aligned
 
 
+def _priority_rank(priority: str) -> int:
+    normalized = str(priority or "").strip().upper()
+    mapping = {
+        "最高": 0,
+        "高": 0,
+        "P0": 0,
+        "中": 1,
+        "P1": 1,
+        "低": 2,
+        "P2": 2,
+        "P3": 3,
+    }
+    return mapping.get(normalized, 2)
+
+
+def _extract_review_focus_indices(tasks: list[dict], review_report: dict) -> set[int]:
+    if not isinstance(review_report, dict):
+        return set()
+    texts = [str(item) for item in (review_report.get("issues", []) or [])]
+    texts.extend(str(item) for item in (review_report.get("suggestions", []) or []))
+    if not texts:
+        return set()
+
+    focus_indices: set[int] = set()
+    for idx, task in enumerate(tasks):
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        if any(title in text for text in texts):
+            focus_indices.add(idx)
+            continue
+        normalized_tokens = re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", title)
+        if not normalized_tokens:
+            continue
+        if any(sum(1 for token in normalized_tokens if token in text) >= 2 for text in texts):
+            focus_indices.add(idx)
+    return focus_indices
+
+
+def _select_prompt_build_indices(
+    tasks: list[dict],
+    missing_indices: list[int],
+    *,
+    focus_indices: set[int],
+    max_total: int = PROMPT_BUILD_MAX_TOTAL,
+    max_p2: int = PROMPT_BUILD_MAX_P2,
+) -> list[int]:
+    if not missing_indices:
+        return []
+
+    missing_set = set(missing_indices)
+    selected: list[int] = []
+
+    focus_candidates = sorted(idx for idx in focus_indices if idx in missing_set)
+    for idx in focus_candidates:
+        selected.append(idx)
+        if len(selected) >= max_total:
+            return selected[:max_total]
+
+    p2_count = 0
+    sorted_candidates = sorted(
+        missing_indices,
+        key=lambda idx: (_priority_rank(tasks[idx].get("priority", "")), idx),
+    )
+    for idx in sorted_candidates:
+        if idx in selected:
+            continue
+        rank = _priority_rank(tasks[idx].get("priority", ""))
+        if rank >= 2 and p2_count >= max_p2:
+            continue
+        selected.append(idx)
+        if rank >= 2:
+            p2_count += 1
+        if len(selected) >= max_total:
+            break
+    return selected
+
+
 def prompt_builder_node(state: ProjectState) -> ProjectState:
     all_tasks = state["task_breakdown"]
     project_id = str(state.get("project_id", "") or state.get("thread_id", "") or "unknown")
     review_rounds = int(state.get("review_rounds", 0) or 0)
+    review_report = state.get("review_report", {}) or {}
+    is_rework_round = review_rounds > 0 and not bool(review_report.get("passed"))
+    focus_indices = _extract_review_focus_indices(all_tasks, review_report)
 
     prompt_slots, missing_indices = load_cached_prompts(project_id, review_rounds, all_tasks)
-    if missing_indices:
+    if is_rework_round and review_rounds > 0:
+        previous_slots, _ = load_cached_prompts(project_id, review_rounds - 1, all_tasks)
+        for idx in range(len(all_tasks)):
+            if idx in focus_indices:
+                continue
+            if prompt_slots[idx] is None and previous_slots[idx] is not None:
+                prompt_slots[idx] = previous_slots[idx]
+        missing_indices = [idx for idx in missing_indices if prompt_slots[idx] is None]
+
+    build_indices = _select_prompt_build_indices(
+        all_tasks,
+        missing_indices,
+        focus_indices=focus_indices,
+    )
+
+    if build_indices:
         agent = build_prompt_builder_agent()
     else:
         agent = None
 
-    for batch_start in range(0, len(missing_indices), PROMPT_BUILD_BATCH_SIZE):
-        batch_indices = missing_indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
+    for batch_start in range(0, len(build_indices), PROMPT_BUILD_BATCH_SIZE):
+        batch_indices = build_indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
         missing_tasks = [all_tasks[i] for i in batch_indices]
         task_summary = summarize_task_breakdown(
             missing_tasks,
@@ -93,8 +193,6 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
             f"{task_summary}"
         )
 
-        review_report = state.get("review_report", {}) or {}
-        is_rework_round = review_rounds > 0 and not bool(review_report.get("passed"))
         if is_rework_round:
             review_feedback = summarize_review_feedback(
                 review_report, max_issues=5, max_suggestions=5

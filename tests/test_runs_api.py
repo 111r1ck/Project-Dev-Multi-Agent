@@ -1,6 +1,8 @@
 from pathlib import Path
+import time
 
 from app.api.routes_runs import _format_run_response, _serialize_snapshot
+from app.dependencies import get_compiled_graph
 from app.main import app
 from fastapi.testclient import TestClient
 
@@ -97,3 +99,77 @@ def test_persist_env_accepts_inline_agent_setting_updates(monkeypatch):
         assert "PLANNER_LLM_MODEL=glm-5" in env_file.read_text(encoding="utf-8")
     finally:
         env_file.unlink(missing_ok=True)
+
+
+def test_continue_reports_failed_status_after_background_error(monkeypatch):
+    class FakeGraph:
+        def invoke(self, payload, config):
+            raise RuntimeError("boom")
+
+        def get_state(self, _config):
+            class Snapshot:
+                next = ("planner",)
+                tasks = ()
+                values = {}
+            return Snapshot()
+
+    monkeypatch.setattr("app.api.routes_runs._CONTINUE_JOBS", {})
+    monkeypatch.setattr("app.api.routes_runs._CONTINUE_JOB_STATUS", {})
+    async def _allow_always(_self, _request, _rule):
+        return True, 999
+
+    monkeypatch.setattr(
+        "app.api.middleware_rate_limit.RedisRateLimitMiddleware._allow",
+        _allow_always,
+    )
+    app.dependency_overrides[get_compiled_graph] = lambda: FakeGraph()
+
+    try:
+        client = TestClient(app)
+        first = client.post("/runs/p-fail/continue")
+        assert first.status_code == 200
+        assert first.json()["status"] == "in_progress"
+
+        second = None
+        for _ in range(20):
+            second = client.post("/runs/p-fail/continue")
+            assert second.status_code == 200
+            if second.json()["status"] == "failed":
+                break
+            time.sleep(0.02)
+
+        assert second is not None
+        assert second.json()["status"] == "failed"
+        assert "boom" in second.json().get("error", "")
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)
+
+
+def test_state_includes_continue_status(monkeypatch):
+    class FakeGraph:
+        def get_state(self, _config):
+            class Snapshot:
+                config = {"configurable": {"thread_id": "p-state"}}
+                metadata = {}
+                values = {"x": 1}
+                next = ("planner",)
+                tasks = ()
+                created_at = None
+
+            return Snapshot()
+
+    monkeypatch.setattr(
+        "app.api.routes_runs._CONTINUE_JOB_STATUS",
+        {"p-state": {"status": "failed", "error": "boom"}},
+    )
+    app.dependency_overrides[get_compiled_graph] = lambda: FakeGraph()
+
+    try:
+        client = TestClient(app)
+        response = client.get("/runs/p-state/state")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["continue_status"]["status"] == "failed"
+        assert payload["continue_status"]["error"] == "boom"
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)

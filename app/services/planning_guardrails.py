@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.services.constraint_classifier import ConstraintSignal
 
 
@@ -66,6 +68,60 @@ _GUARDRAIL_TASKS: dict[str, dict] = {
     },
 }
 
+_RISK_MITIGATION_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "title": "实现大结果集处理与资源保护机制",
+        "description": "针对大数据量查询/导出/聚合场景，设计流式处理、分片分页、异步任务、背压限流与内存水位保护，并补齐失败重试与降级策略。",
+        "priority": "P0",
+        "owner_role": "后端开发工程师",
+        "risk_markers": (
+            "内存",
+            "oom",
+            "资源耗尽",
+            "大数据量",
+            "大结果集",
+            "导出",
+            "批量处理",
+        ),
+        "coverage_markers": (
+            "流式",
+            "分片",
+            "分页",
+            "异步",
+            "背压",
+            "内存水位",
+            "资源保护",
+            "队列",
+        ),
+    },
+    {
+        "title": "设计并发冲突防护与唯一约束策略",
+        "description": "针对并发写入冲突场景，明确唯一约束/组合索引、事务锁或乐观锁方案，并补齐冲突重试、幂等校验与一致性验收用例。",
+        "priority": "P0",
+        "owner_role": "后端开发工程师",
+        "risk_markers": (
+            "并发",
+            "冲突",
+            "竞态",
+            "重复预订",
+            "重复提交",
+            "事务锁",
+            "唯一索引",
+            "唯一约束",
+        ),
+        "coverage_markers": (
+            "唯一索引",
+            "唯一约束",
+            "组合索引",
+            "事务锁",
+            "乐观锁",
+            "版本号",
+            "幂等",
+            "冲突重试",
+        ),
+    },
+)
+
 
 def _task_text(task: dict) -> str:
     return f"{task.get('title', '')} {task.get('description', '')}"
@@ -77,6 +133,11 @@ def _combined_task_text(tasks: list[dict]) -> str:
 
 def _already_covered(tasks: list[dict], title: str) -> bool:
     return any(title == str(task.get("title", "")).strip() for task in tasks)
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    normalized = str(text or "").lower()
+    return any(marker.lower() in normalized for marker in markers)
 
 
 def _priority_rank(priority: str) -> int:
@@ -109,6 +170,43 @@ def ensure_guardrail_tasks(
         if not template or _already_covered(normalized, template["title"]):
             continue
         normalized.append({**template, "depends_on": []})
+    return normalized
+
+
+def ensure_risk_mitigation_tasks(
+    tasks: list[dict],
+    feasibility_report: dict | None,
+    review_report: dict | None,
+) -> list[dict]:
+    normalized = list(tasks)
+    task_text = _combined_task_text(normalized)
+
+    risk_texts = []
+    if isinstance(feasibility_report, dict):
+        risk_texts.extend(str(item) for item in (feasibility_report.get("risks", []) or []))
+    if isinstance(review_report, dict):
+        risk_texts.extend(str(item) for item in (review_report.get("issues", []) or []))
+    combined_risk_text = " ".join(risk_texts)
+
+    for rule in _RISK_MITIGATION_RULES:
+        title = str(rule["title"])
+        if _already_covered(normalized, title):
+            continue
+        if not _contains_any(combined_risk_text, tuple(rule["risk_markers"])):
+            continue
+        if _contains_any(task_text, tuple(rule["coverage_markers"])):
+            continue
+        normalized.append(
+            {
+                "title": title,
+                "description": str(rule["description"]),
+                "priority": str(rule["priority"]),
+                "depends_on": [],
+                "owner_role": str(rule["owner_role"]),
+            }
+        )
+        task_text += f" {title} {rule['description']}"
+
     return normalized
 
 
