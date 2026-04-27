@@ -1066,11 +1066,27 @@
           { key: "prompt_pack", label: "提示词包（prompt_pack）" },
           { key: "review_report", label: "评审报告（review_report）" }
         ];
+        const reviewDiagnostics = (
+          data.result &&
+          data.result.review_report &&
+          Array.isArray(data.result.review_report.diagnostics)
+        )
+          ? data.result.review_report.diagnostics
+          : [];
+        if (reviewDiagnostics.length > 0) {
+          sectionDefs.push({
+            key: "__review_diagnostics__",
+            label: "评审诊断（diagnostics）"
+          });
+        }
 
         completedSections.innerHTML = sectionDefs.map((section) => {
-          const value = Object.prototype.hasOwnProperty.call(data.result, section.key)
-            ? data.result[section.key]
-            : null;
+          let value = null;
+          if (section.key === "__review_diagnostics__") {
+            value = reviewDiagnostics;
+          } else if (Object.prototype.hasOwnProperty.call(data.result, section.key)) {
+            value = data.result[section.key];
+          }
           return `
             <article class="result-block">
               <h4 class="result-block-title">${escapeHtml(section.label)}</h4>
@@ -1193,10 +1209,23 @@
           summary.review_passed = data.result.review_report ? data.result.review_report.passed : null;
           summary.task_count = Array.isArray(data.result.task_breakdown) ? data.result.task_breakdown.length : 0;
           summary.prompt_count = Array.isArray(data.result.prompt_pack) ? data.result.prompt_pack.length : 0;
+          summary.review_diagnostics_count = Array.isArray(
+            data.result.review_report && data.result.review_report.diagnostics
+          )
+            ? data.result.review_report.diagnostics.length
+            : 0;
           summary.errors = Array.isArray(data.state && data.state.errors) ? data.state.errors : [];
         }
         if (data.error) {
           summary.error = data.error;
+        }
+        if (
+          summary.review_diagnostics_count == null &&
+          data.state &&
+          data.state.review_report &&
+          Array.isArray(data.state.review_report.diagnostics)
+        ) {
+          summary.review_diagnostics_count = data.state.review_report.diagnostics.length;
         }
         return summary;
       }

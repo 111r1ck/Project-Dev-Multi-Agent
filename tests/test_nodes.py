@@ -1092,3 +1092,56 @@ def test_reviewer_forces_rework_when_passed_report_contains_blocking_issues(monk
     assert result["next_step"] == "planner"
     assert result["review_rounds"] == 1
     assert result["review_report"]["passed"] is False
+
+
+def test_reviewer_postprocess_downgrades_contradictory_issue_to_suggestion(monkeypatch):
+    class ContradictoryCoverageReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【硬性需求缺失-签到方案】需求明确要求'开始后未取消且未签到记1次违规'，但签到采集方式未确定。"
+                    ],
+                    suggestions=[
+                        "【签到方案决策】建议MVP采用手动签到+二维码签到双模式。"
+                    ],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: ContradictoryCoverageReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "会议室预订", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "设计签到技术方案",
+                "description": "确定手动签到+二维码签到双模式，并给出签到状态流转与GPS校验逻辑。",
+                "priority": "P0",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [
+            {
+                "task_title": "设计签到技术方案",
+                "coding_prompt": "实现手动签到+二维码签到并明确状态机。",
+                "test_prompt": "覆盖签到路径与异常场景。",
+            }
+        ],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])

@@ -1,3 +1,5 @@
+import re
+
 from app.agents.reviewer_agent import build_reviewer_agent
 from app.config import settings
 from app.graph.nodes.common import (
@@ -185,6 +187,219 @@ def _normalize_review_passed(review_report: dict) -> tuple[dict, bool]:
         normalized["passed"] = False
         passed = False
     return normalized, passed
+
+
+def _is_hard_blocking_issue_text(issue: str) -> bool:
+    text = str(issue or "").lower()
+    markers = (
+        "关键",
+        "缺失",
+        "阻塞",
+        "无法",
+        "不能",
+        "风险",
+        "合规",
+        "审计",
+        "日志持久化",
+        "性能验证",
+        "性能测试",
+        "数据丢失",
+        "架构冲突",
+        "blocker",
+        "critical",
+        "must",
+    )
+    return any(marker in text for marker in markers)
+
+
+_POSTPROCESS_STOP_WORDS: set[str] = {
+    "需求",
+    "明确",
+    "要求",
+    "缺失",
+    "功能",
+    "方案",
+    "实现",
+    "相关",
+    "任务",
+    "建议",
+    "采用",
+    "模式",
+    "MVP",
+}
+
+
+def _pp_tokens(text: str) -> set[str]:
+    tokens = re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", str(text or ""))
+    return {t for t in tokens if t and t not in _POSTPROCESS_STOP_WORDS}
+
+
+def _cjk_bigrams(text: str) -> set[str]:
+    normalized = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(text or ""))
+    chars = [ch for ch in normalized if "\u4e00" <= ch <= "\u9fff"]
+    if len(chars) < 2:
+        return set()
+    return {"".join(chars[i : i + 2]) for i in range(len(chars) - 1)}
+
+
+def _issue_suggestion_has_contradiction_evidence(
+    issue: str,
+    suggestions: list[str],
+    tasks: list[dict],
+    prompts: list[dict],
+    diag: dict | None = None,
+) -> bool:
+    issue_tokens = _pp_tokens(issue)
+    if not issue_tokens:
+        return False
+
+    corpus = " ".join(
+        [
+            " ".join(
+                f"{str(item.get('title', ''))} {str(item.get('description', ''))}" for item in (tasks or [])
+            ),
+            " ".join(
+                f"{str(item.get('task_title', ''))} {str(item.get('coding_prompt', ''))} {str(item.get('test_prompt', ''))}"
+                for item in (prompts or [])
+            ),
+        ]
+    )
+    corpus_tokens = _pp_tokens(corpus)
+    issue_corpus_token_overlap = len(issue_tokens & corpus_tokens)
+
+    source_scores = (diag or {}).get("source_scores", {}) if isinstance(diag, dict) else {}
+    max_source_score = 0.0
+    if isinstance(source_scores, dict) and source_scores:
+        max_source_score = max(float(v or 0.0) for v in source_scores.values())
+
+    uncertainty_markers = ("未确定", "待确认", "未明确", "尚未确定", "不明确")
+    recommendation_markers = ("建议", "方案", "采用", "可选", "推荐")
+    has_uncertainty_issue = any(marker in str(issue or "") for marker in uncertainty_markers)
+    issue_bigrams = _cjk_bigrams(issue)
+    corpus_bigrams = _cjk_bigrams(corpus)
+
+    for suggestion in suggestions:
+        sug_tokens = _pp_tokens(suggestion)
+        sug_bigrams = _cjk_bigrams(suggestion)
+        if not sug_tokens:
+            # keep evaluating with char-level evidence
+            pass
+        else:
+            if len(issue_tokens & sug_tokens) < 1:
+                # no token-level hit, allow char-level fallback below
+                pass
+            else:
+                corpus_overlap = len(sug_tokens & corpus_tokens)
+                if corpus_overlap >= 2 and max_source_score >= 0.45:
+                    return True
+                if (
+                    has_uncertainty_issue
+                    and (corpus_overlap >= 2 or issue_corpus_token_overlap >= 1)
+                    and any(marker in suggestion for marker in recommendation_markers)
+                ):
+                    return True
+
+        # Fallback for Chinese phrasing variance: use char bigram overlap.
+        issue_suggestion_bigram_hit = len(issue_bigrams & sug_bigrams) >= 2
+        suggestion_corpus_bigram_hit = len(sug_bigrams & corpus_bigrams) >= 3
+        if issue_suggestion_bigram_hit and suggestion_corpus_bigram_hit:
+            return True
+
+    return False
+
+
+def _postprocess_review_report_with_evidence(
+    *,
+    tasks: list[dict],
+    prompts: list[dict],
+    review_report: dict,
+) -> tuple[dict, bool]:
+    normalized = dict(review_report or {})
+    issues = [str(item) for item in (normalized.get("issues", []) or [])]
+    suggestions = [str(item) for item in (normalized.get("suggestions", []) or [])]
+    if not issues:
+        passed = bool(normalized.get("passed"))
+        return normalized, passed
+
+    coverage_analysis = analyze_blocking_issue_coverage(
+        tasks,
+        issues,
+        prompt_pack=prompts,
+        min_evidence_hits=settings.coverage_min_evidence_hits,
+        min_confidence=settings.coverage_min_confidence,
+        blocking_confidence=settings.coverage_blocking_confidence,
+    )
+    uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
+    uncovered_set = set(uncovered)
+    diagnostics = coverage_analysis.get("diagnostics", []) or []
+    diag_by_issue = {
+        str(item.get("issue_text", "")): item for item in diagnostics if isinstance(item, dict)
+    }
+
+    kept_issues: list[str] = []
+    downgraded_issues: list[str] = []
+    for issue in issues:
+        if issue in uncovered_set:
+            if _issue_suggestion_has_contradiction_evidence(
+                issue,
+                suggestions,
+                tasks,
+                prompts,
+                diag_by_issue.get(issue, {}),
+            ):
+                downgraded_issues.append(issue)
+                continue
+            kept_issues.append(issue)
+            continue
+        diag = diag_by_issue.get(issue, {})
+        # Guardrail: hard blocking issues should not be downgraded if still uncovered.
+        decision = str(diag.get("decision", ""))
+        evidence_hits = int(diag.get("evidence_hits", 0) or 0)
+        coverage_confidence = float(diag.get("coverage_confidence", 0.0) or 0.0)
+        very_low_coverage = coverage_confidence < (settings.coverage_min_confidence * 0.55)
+        source_components = diag.get("source_components", {}) if isinstance(diag, dict) else {}
+        max_core_score = 0.0
+        if isinstance(source_components, dict):
+            for comp in source_components.values():
+                if not isinstance(comp, dict):
+                    continue
+                core_score = (
+                    0.45 * float(comp.get("keyword", 0.0) or 0.0)
+                    + 0.35 * float(comp.get("semantic", 0.0) or 0.0)
+                    + 0.20 * float(comp.get("structure", 0.0) or 0.0)
+                )
+                if core_score > max_core_score:
+                    max_core_score = core_score
+        weak_core_evidence = max_core_score < 0.42
+        low_signal_uncovered = evidence_hits == 0 and very_low_coverage
+        weak_single_source_uncovered = (
+            evidence_hits <= 1
+            and weak_core_evidence
+            and coverage_confidence < settings.coverage_min_confidence
+        )
+        if (
+            _is_hard_blocking_issue_text(issue)
+            and decision == "downgraded_uncovered"
+            and (low_signal_uncovered or weak_single_source_uncovered)
+        ):
+            kept_issues.append(issue)
+        else:
+            downgraded_issues.append(issue)
+
+    if downgraded_issues:
+        suggestions.extend(
+            [f"【已降级为建议（证据已覆盖或置信度不足）】{item}" for item in downgraded_issues]
+        )
+
+    normalized["issues"] = kept_issues
+    normalized["suggestions"] = suggestions
+    normalized["diagnostics"] = diagnostics
+
+    if kept_issues:
+        normalized["passed"] = False
+    else:
+        normalized["passed"] = True
+    return normalized, bool(normalized["passed"])
 
 
 def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> dict | None:
@@ -391,6 +606,11 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     )
     cached_review = load_cached_review(project_id, cache_payload)
     if cached_review is not None:
+        cached_review, passed = _postprocess_review_report_with_evidence(
+            tasks=tasks,
+            prompts=prompts,
+            review_report=cached_review,
+        )
         cached_review, passed = _normalize_review_passed(cached_review)
         return _apply_review_outcome(
             state,
@@ -430,6 +650,11 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
-    review_report, passed = _normalize_review_passed(structured.model_dump())
+    review_report, passed = _postprocess_review_report_with_evidence(
+        tasks=tasks,
+        prompts=prompts,
+        review_report=structured.model_dump(),
+    )
+    review_report, passed = _normalize_review_passed(review_report)
     save_cached_review(project_id, cache_payload, review_report)
     return _apply_review_outcome(state, review_report, passed=passed)

@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Any
+from difflib import SequenceMatcher
 
 
 def extract_structured_response(result: dict):
@@ -99,13 +100,16 @@ def _normalize_text(text: str) -> str:
 
 def _extract_issue_focus_phrase(issue: str) -> str | None:
     patterns = [
+        r"【[^】\-]{0,40}-([^】]{2,80})】",
         r"缺少([^，。；\n]{2,80})任务",
+        r"缺少([^，。；\n]{2,120})(?:。|，|；|$)",
         r"未包含([^，。；\n]{2,80})任务",
         r"新增任务[:：]\s*([^，。；\n]{2,80})",
         r"需求明确要求['‘“\"]([^'’”\"]{2,80})['’”\"]功能",
         r"未见([^，。；\n]{2,80})相关任务",
         r"未见([^，。；\n]{2,80})开发任务",
         r"未明确包含([^，。；\n]{2,80})逻辑",
+        r"([^，。；\n]{2,80})未确定",
     ]
     text = _normalize_text(issue)
     for pattern in patterns:
@@ -155,44 +159,139 @@ def _tokenize_text(text: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", _normalize_text(text))
 
 
-_COVERAGE_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("数据保留", "保留策略", "生命周期", "归档", "冷热", "容量", "存储规划", "备份恢复"),
-    ("性能验证", "性能测试", "压测", "负载", "容量模型", "基准", "回归检测", "响应时间", "延迟"),
-    ("监控告警", "监控", "告警规则", "指标采集", "日志追踪", "链路追踪", "可观测"),
-    ("故障切换", "故障恢复", "高可用", "可用性", "备份恢复", "容灾", "演练"),
-    ("灰度发布", "回滚", "发布策略", "变更验证", "流量切换"),
-    ("权限", "访问控制", "RBAC", "隔离", "鉴权", "越权", "合规"),
-    ("审计", "日志", "留痕", "追踪", "回溯"),
-    ("依赖", "顺序", "前置", "状态机", "事件", "触发", "闭环"),
-    ("并发", "冲突", "竞态", "锁", "事务", "唯一索引", "唯一约束", "组合索引", "幂等", "重复提交"),
-    ("移动端", "移动", "App", "功能边界", "配置类操作", "路由守卫"),
+_ACTION_MARKERS: tuple[str, ...] = (
+    "开发",
+    "实现",
+    "设计",
+    "新增",
+    "删除",
+    "更新",
+    "查看",
+    "取消",
+    "提交",
+    "审批",
+    "导入",
+    "导出",
+    "处理",
+    "校验",
+    "联调",
+    "配置",
+    "通知",
+    "释放",
+    "同步",
+    "查询",
 )
 
+_CLUSTER_STOP_WORDS: set[str] = {
+    "任务",
+    "功能",
+    "相关",
+    "开发",
+    "实现",
+    "方案",
+    "问题",
+    "风险",
+    "流程",
+    "系统",
+    "页面",
+    "接口",
+    "逻辑",
+}
 
-def _alias_group_hits(text: str) -> set[int]:
-    normalized = _normalize_text(text).lower()
-    hits: set[int] = set()
-    for idx, group in enumerate(_COVERAGE_ALIAS_GROUPS):
-        if any(marker.lower() in normalized for marker in group):
-            hits.add(idx)
-    return hits
+_META_CAPABILITY_CLUSTERS: dict[str, tuple[str, ...]] = {
+    "delivery": ("前端", "后端", "联调", "页面", "接口", "交付", "端到端"),
+    "data_integrity": ("幂等", "一致性", "状态机", "事务", "锁", "回滚", "补偿"),
+    "performance": ("性能", "延迟", "容量", "压测", "吞吐", "负载", "超时"),
+    "security": ("权限", "鉴权", "认证", "隔离", "审计", "合规", "越权"),
+    "observability": ("监控", "日志", "告警", "指标", "追踪", "链路"),
+    "release_safety": ("灰度", "发布", "回滚", "变更", "演练"),
+}
+
+_DYNAMIC_CLUSTER_WEIGHT = 0.12
+_META_CLUSTER_WEIGHT = 0.08
 
 
-def _is_issue_covered_by_task(issue: str, task_text: str) -> bool:
-    issue_groups = _alias_group_hits(issue)
-    if issue_groups:
-        task_groups = _alias_group_hits(task_text)
-        shared = issue_groups & task_groups
-        if len(shared) >= min(2, len(issue_groups)):
-            return True
-        if shared and any(marker in issue for marker in ("缺失", "未覆盖", "无", "缺少")):
-            return True
+def _jaccard_similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
 
-    terms = _extract_issue_terms(issue)
-    if not terms:
-        return False
-    threshold = min(2, len(terms))
-    return sum(1 for term in terms if term in task_text) >= threshold
+
+def _sequence_similarity(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _extract_action_object_pairs(text: str) -> set[tuple[str, str]]:
+    normalized = _normalize_text(text)
+    pairs: set[tuple[str, str]] = set()
+    for action in _ACTION_MARKERS:
+        pattern = rf"{action}([\u4e00-\u9fffA-Za-z0-9_\-]{{2,20}})"
+        for match in re.findall(pattern, normalized):
+            obj = str(match).strip()
+            if obj:
+                pairs.add((action, obj))
+    return pairs
+
+
+def _build_dynamic_clusters(texts: list[str], top_k: int = 8) -> dict[str, set[str]]:
+    token_lists: list[list[str]] = []
+    doc_freq: dict[str, int] = {}
+    for text in texts:
+        tokens = [tok for tok in _tokenize_text(text) if tok not in _CLUSTER_STOP_WORDS]
+        if not tokens:
+            continue
+        token_lists.append(tokens)
+        for token in set(tokens):
+            doc_freq[token] = doc_freq.get(token, 0) + 1
+
+    if not token_lists or not doc_freq:
+        return {}
+
+    top_terms = sorted(doc_freq.keys(), key=lambda t: (-doc_freq[t], t))[: max(1, top_k)]
+    clusters: dict[str, set[str]] = {}
+    for center in top_terms:
+        co_freq: dict[str, int] = {}
+        for tokens in token_lists:
+            token_set = set(tokens)
+            if center not in token_set:
+                continue
+            for token in token_set:
+                if token == center or token in _CLUSTER_STOP_WORDS:
+                    continue
+                co_freq[token] = co_freq.get(token, 0) + 1
+        cluster_terms = [center] + [
+            token
+            for token, _ in sorted(co_freq.items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+        ]
+        clusters[center] = set(cluster_terms)
+    return clusters
+
+
+def _cluster_overlap_score(
+    target_tokens: set[str],
+    source_tokens: set[str],
+    clusters: dict[str, set[str]],
+) -> tuple[float, list[str]]:
+    if not target_tokens or not source_tokens or not clusters:
+        return 0.0, []
+    matched_clusters: list[str] = []
+    scores: list[float] = []
+    for center, terms in clusters.items():
+        if not (terms & target_tokens):
+            continue
+        overlap = terms & source_tokens
+        if not overlap:
+            continue
+        matched_clusters.append(center)
+        scores.append(len(overlap) / max(1, len(terms)))
+    if not scores:
+        return 0.0, []
+    return round(sum(scores) / len(scores), 3), matched_clusters[:5]
 
 
 def _extract_issue_focus(issue: str) -> tuple[str, float]:
@@ -236,15 +335,66 @@ def _source_hit(
     capability: str,
     issue_terms: list[str],
     source_text: str,
-) -> bool:
+    dynamic_clusters: dict[str, set[str]] | None = None,
+    meta_clusters: dict[str, set[str]] | None = None,
+) -> tuple[bool, float, dict[str, float]]:
     if not source_text:
-        return False
-    if capability and capability in source_text:
-        return True
-    if not issue_terms:
-        return False
-    threshold = min(2, len(issue_terms))
-    return sum(1 for term in issue_terms if term in source_text) >= threshold
+        return False, 0.0, {"keyword": 0.0, "semantic": 0.0, "structure": 0.0}
+
+    source_tokens = set(_tokenize_text(source_text))
+    issue_token_set = set(issue_terms)
+    capability_tokens = set(_tokenize_text(capability))
+
+    keyword_terms = capability_tokens | issue_token_set
+    keyword_hits = sum(1 for term in keyword_terms if term in source_tokens)
+    keyword_score = (
+        keyword_hits / max(1, len(keyword_terms))
+        if keyword_terms
+        else 0.0
+    )
+    direct_capability_match = bool(capability and capability in source_text)
+    if direct_capability_match:
+        keyword_score = max(keyword_score, 1.0)
+
+    semantic_token_score = _jaccard_similarity(keyword_terms, source_tokens)
+    semantic_char_score = _sequence_similarity(capability or " ".join(issue_terms[:3]), source_text)
+    semantic_score = max(semantic_token_score, semantic_char_score)
+    if direct_capability_match:
+        semantic_score = max(semantic_score, 0.9)
+
+    issue_pairs = _extract_action_object_pairs(capability + " " + " ".join(issue_terms))
+    source_pairs = _extract_action_object_pairs(source_text)
+    structure_score = 0.0
+    if issue_pairs and source_pairs:
+        structure_score = 1.0 if (issue_pairs & source_pairs) else 0.0
+
+    dynamic_score, _ = _cluster_overlap_score(
+        keyword_terms,
+        source_tokens,
+        dynamic_clusters or {},
+    )
+    meta_score, _ = _cluster_overlap_score(
+        keyword_terms,
+        source_tokens,
+        meta_clusters or {},
+    )
+
+    score = (
+        0.45 * keyword_score
+        + 0.35 * semantic_score
+        + 0.20 * structure_score
+        + (_DYNAMIC_CLUSTER_WEIGHT * dynamic_score)
+        + (_META_CLUSTER_WEIGHT * meta_score)
+    )
+    is_hit = score >= 0.55
+    components = {
+        "keyword": round(keyword_score, 3),
+        "semantic": round(semantic_score, 3),
+        "structure": round(structure_score, 3),
+        "dynamic_cluster": round(dynamic_score, 3),
+        "meta_cluster": round(meta_score, 3),
+    }
+    return is_hit, round(score, 3), components
 
 
 def analyze_blocking_issue_coverage(
@@ -257,6 +407,9 @@ def analyze_blocking_issue_coverage(
     blocking_confidence: float = 0.75,
 ) -> dict[str, Any]:
     sources = _build_evidence_sources(tasks, prompt_pack=prompt_pack)
+    source_texts = [str(v) for v in sources.values() if str(v).strip()]
+    dynamic_clusters = _build_dynamic_clusters(source_texts, top_k=8)
+    meta_clusters = {k: set(v) for k, v in _META_CAPABILITY_CLUSTERS.items()}
     source_weights = {
         "task_title": 0.30,
         "task_description": 0.22,
@@ -277,12 +430,32 @@ def analyze_blocking_issue_coverage(
             issue_terms = list(dict.fromkeys(_tokenize_text(capability) + issue_terms))
 
         matched_sources: list[str] = []
+        source_scores: dict[str, float] = {}
+        source_components: dict[str, dict[str, float]] = {}
         for source_name, source_text in sources.items():
-            if _source_hit(capability, issue_terms, source_text):
+            is_hit, score, components = _source_hit(
+                capability,
+                issue_terms,
+                source_text,
+                dynamic_clusters=dynamic_clusters,
+                meta_clusters=meta_clusters,
+            )
+            source_scores[source_name] = score
+            source_components[source_name] = components
+            if is_hit:
                 matched_sources.append(source_name)
 
         evidence_hits = len(matched_sources)
-        coverage_confidence = sum(source_weights[name] for name in matched_sources)
+        source_support = sum(source_weights.get(name, 0.0) for name in matched_sources)
+        avg_match_quality = (
+            sum(source_scores.get(name, 0.0) for name in matched_sources) / evidence_hits
+            if evidence_hits
+            else 0.0
+        )
+        # confidence combines:
+        # - cross-source support breadth (how many weighted sources hit)
+        # - average quality on matched sources
+        coverage_confidence = (0.65 * source_support) + (0.35 * avg_match_quality)
         is_covered = (
             evidence_hits >= max(1, int(min_evidence_hits))
             and coverage_confidence >= float(min_confidence)
@@ -306,8 +479,22 @@ def analyze_blocking_issue_coverage(
                 "evidence_checked": list(sources.keys()),
                 "matched_evidence": matched_sources,
                 "evidence_hits": evidence_hits,
+                "source_support": round(source_support, 3),
+                "avg_match_quality": round(avg_match_quality, 3),
                 "coverage_confidence": round(coverage_confidence, 3),
                 "missing_confidence": round(missing_confidence, 3),
+                "source_scores": source_scores,
+                "source_components": source_components,
+                "cluster_weights": {
+                    "dynamic": _DYNAMIC_CLUSTER_WEIGHT,
+                    "meta": _META_CLUSTER_WEIGHT,
+                },
+                "dynamic_clusters_used": {
+                    k: sorted(list(v)) for k, v in list(dynamic_clusters.items())[:8]
+                },
+                "meta_clusters_used": {
+                    k: sorted(list(v)) for k, v in meta_clusters.items()
+                },
                 "is_blocking": decision == "blocking_uncovered",
                 "decision": decision,
                 "why_not_matched": ""
@@ -321,18 +508,3 @@ def analyze_blocking_issue_coverage(
         "downgraded": downgraded,
         "diagnostics": diagnostics,
     }
-
-
-def find_uncovered_blocking_issues(
-    tasks: list[dict[str, Any]],
-    blocking_issues: list[str],
-) -> list[str]:
-    analysis = analyze_blocking_issue_coverage(
-        tasks,
-        blocking_issues,
-        prompt_pack=None,
-        min_evidence_hits=1,
-        min_confidence=0.5,
-        blocking_confidence=0.5,
-    )
-    return [str(item) for item in (analysis.get("uncovered", []) or [])]
