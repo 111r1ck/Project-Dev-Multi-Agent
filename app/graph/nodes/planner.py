@@ -43,6 +43,8 @@ def _extract_missing_task_candidates(review_report: dict) -> list[tuple[str, str
         r"未包含([^，。；\n]{2,60})任务",
         r"未包含([^，。；\n]{2,60})",
         r"补充([^，。；\n]{2,80})任务",
+        r"功能缺失[:：][^'’”\"\n]*['‘“\"]([^'’”\"]{2,80})['’”\"]功能",
+        r"需求明确要求([^，。；\n]{2,80})功能",
     ]
 
     for raw in texts:

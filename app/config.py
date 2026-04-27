@@ -102,6 +102,9 @@ class Settings:
     reviewer_cache_ttl_seconds: int = int(os.getenv("REVIEWER_CACHE_TTL_SECONDS", "21600"))
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
     review_max_rounds: int = int(os.getenv("REVIEW_MAX_ROUNDS", "2"))
+    coverage_min_evidence_hits: int = int(os.getenv("COVERAGE_MIN_EVIDENCE_HITS", "2"))
+    coverage_min_confidence: float = float(os.getenv("COVERAGE_MIN_CONFIDENCE", "0.65"))
+    coverage_blocking_confidence: float = float(os.getenv("COVERAGE_BLOCKING_CONFIDENCE", "0.75"))
 
 
 settings = Settings()

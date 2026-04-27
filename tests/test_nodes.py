@@ -301,6 +301,44 @@ def test_planner_extracts_supplemental_tasks_from_review_suggestions(monkeypatch
     assert "本地账号登录、双登录方式切换逻辑的实现任务" in titles
 
 
+def test_planner_extracts_missing_feature_tasks_from_blocking_issues(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakePlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {
+            "summary": "会议室预订系统",
+            "modules": ["预订", "用户中心"],
+            "constraints": [],
+        },
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "review_report": {
+            "passed": False,
+            "issues": [
+                "回流覆盖检查未通过：以下关键阻塞项尚未被任务清单命中。",
+                "功能缺失：需求明确要求'取消预订'功能，但任务列表中无对应实现任务，属于硬性需求缺失",
+                "功能缺失：需求明确要求'查看个人预订记录'功能，但任务列表中无对应实现任务，属于硬性需求缺失",
+            ],
+            "suggestions": [
+                "请先补齐上述阻塞项对应任务，再进入评审。"
+            ],
+        },
+        "review_rounds": 1,
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+
+    assert "取消预订任务" in titles
+    assert "查看个人预订记录任务" in titles
+
+
 def test_planner_appends_review_time_constraints_to_existing_task(monkeypatch):
     class CompliancePlannerAgent:
         def invoke(self, _payload):
@@ -580,6 +618,74 @@ def test_prompt_builder_generates_missing_tasks_in_batches(monkeypatch):
     assert all(not item.get("is_fallback") for item in result["prompt_pack"])
 
 
+def test_prompt_builder_forces_non_fallback_for_p0_after_retries(monkeypatch):
+    class AlwaysMismatchedPromptAgent:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _payload):
+            self.calls += 1
+            return {
+                "structured_response": PromptPackOutput(
+                    prompts=[
+                        PromptTask(
+                            task_title="不匹配任务标题",
+                            coding_prompt="cp",
+                            test_prompt="tp",
+                        )
+                    ]
+                )
+            }
+
+    fake = AlwaysMismatchedPromptAgent()
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
+        lambda: fake,
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        lambda _project_id, _review_rounds, tasks: ([None] * len(tasks), list(range(len(tasks)))),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    state = {
+        "task_breakdown": [
+            {
+                "title": "P0关键任务",
+                "description": "关键链路",
+                "priority": "P0",
+                "depends_on": [],
+                "owner_role": "后端开发工程师",
+            },
+            {
+                "title": "普通任务",
+                "description": "普通链路",
+                "priority": "P2",
+                "depends_on": [],
+                "owner_role": "后端开发工程师",
+            },
+        ],
+        "review_report": {},
+        "review_rounds": 0,
+    }
+
+    result = prompt_builder_node(state)
+    prompt_pack = result["prompt_pack"]
+    p0_prompt = prompt_pack[0]
+    p2_prompt = prompt_pack[1]
+
+    assert fake.calls >= 2
+    assert p0_prompt["task_title"] == "P0关键任务"
+    assert p0_prompt.get("is_fallback") is False
+    assert p0_prompt.get("forced_for_p0") is True
+    assert "输入：" in p0_prompt["coding_prompt"]
+    assert "回归测试" in p0_prompt["test_prompt"]
+    assert p2_prompt.get("is_fallback") is True
+
+
 def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
     monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
@@ -610,6 +716,8 @@ def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
     assert result["next_step"] == "finish"
     assert result["review_rounds"] == 2
     assert result["review_report"]["passed"] is False
+    assert isinstance(result["review_report"].get("diagnostics", []), list)
+    assert result["review_report"]["diagnostics"]
     assert fake.calls == 0
 
 
@@ -684,6 +792,132 @@ def test_reviewer_calls_llm_when_blocking_issue_is_covered(monkeypatch):
         "review_report": {
             "passed": False,
             "issues": ["【关键功能缺失】任务清单中缺少支付回调安全验证机制任务，存在风险。"],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert fake.calls == 1
+
+
+def test_reviewer_calls_llm_when_quoted_feature_issue_is_covered(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "会议室预订", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "开发取消预订接口（后端）",
+                "description": "提供取消预订接口并校验权限。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "开发小程序取消预订功能",
+                "description": "在预订记录页面实现取消预订入口与确认流程。",
+                "priority": "P0",
+                "depends_on": ["开发取消预订接口（后端）"],
+            },
+        ],
+        "prompt_pack": [
+            {"task_title": "开发取消预订接口（后端）", "coding_prompt": "a", "test_prompt": "b"},
+            {"task_title": "开发小程序取消预订功能", "coding_prompt": "a", "test_prompt": "b"},
+        ],
+        "review_report": {
+            "passed": False,
+            "issues": [
+                "功能缺失：需求明确要求'取消预订'功能，但任务列表中未见取消预订相关任务（后端接口+前端页面），属于硬性需求遗漏"
+            ],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert fake.calls == 1
+
+
+def test_reviewer_calls_llm_when_timeout_strategy_issue_is_covered(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "会议室预订", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "审批超时自动处理任务",
+                "description": "实现定时任务扫描审批超时记录，自动取消并释放会议室资源，记录日志并通知相关人。",
+                "priority": "P0",
+                "depends_on": ["审批流状态机设计与实现"],
+            }
+        ],
+        "prompt_pack": [
+            {"task_title": "审批超时自动处理任务", "coding_prompt": "a", "test_prompt": "b"},
+        ],
+        "review_report": {
+            "passed": False,
+            "issues": [
+                "【审批超时策略未定义】风险中提到'缺乏明确的超时自动策略会导致会议室资源长期锁定'，但任务列表中未见'审批超时自动处理'相关任务（如定时任务、超时释放逻辑），这将导致高优先级会议室资源被待审批状态长期占用。"
+            ],
+            "suggestions": [],
+        },
+        "review_rounds": 1,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert fake.calls == 1
+
+
+def test_reviewer_gate_downgrades_low_confidence_issue_instead_of_blocking(monkeypatch):
+    fake = FakeReviewerAgent(passed=True)
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: fake,
+    )
+    state = {
+        "requirement_doc": {"summary": "会议室预订", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "开发预订流程",
+                "description": "实现预订链路",
+                "priority": "P1",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [{"task_title": "开发预订流程", "coding_prompt": "a", "test_prompt": "b"}],
+        "review_report": {
+            "passed": False,
+            "issues": ["体验问题：建议优化页面操作体验，减少点击步骤。"],
             "suggestions": [],
         },
         "review_rounds": 1,

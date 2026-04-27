@@ -13,6 +13,7 @@ from app.services.prompt_cache import load_cached_prompts, save_cached_prompts
 PROMPT_BUILD_BATCH_SIZE = 8
 PROMPT_BUILD_MAX_TOTAL = 14
 PROMPT_BUILD_MAX_P2 = 2
+P0_PROMPT_RETRY_MAX_ATTEMPTS = 2
 
 
 def _build_fallback_prompt(task: dict) -> dict:
@@ -37,6 +38,38 @@ def _build_fallback_prompt(task: dict) -> dict:
             "输出：测试用例清单、关键断言、验收标准。"
         ),
         "is_fallback": True,
+    }
+
+
+def _build_forced_p0_prompt(task: dict) -> dict:
+    title = task.get("title", "未命名任务")
+    description = task.get("description", "")
+    owner = task.get("owner_role", "")
+    depends_on = task.get("depends_on", [])
+    deps_text = ", ".join(depends_on) if depends_on else "无"
+    return {
+        "task_title": title,
+        "coding_prompt": (
+            f"任务目标：实现《{title}》并满足可上线要求。\n"
+            f"任务描述：{description}\n"
+            f"责任角色：{owner}；上游依赖：{deps_text}\n"
+            "输入：明确接口输入参数、鉴权上下文、边界输入与异常输入。\n"
+            "输出：明确成功响应、失败响应、错误码、状态变更与日志字段。\n"
+            "约束：幂等性、权限校验、超时与重试策略、回滚或补偿策略。\n"
+            "边界：空输入、重复请求、并发冲突、外部依赖异常、部分失败。\n"
+            "实现要求：给出关键数据结构、核心流程伪代码、异常处理分支与验收标准。"
+        ),
+        "test_prompt": (
+            f"为《{title}》设计测试并输出可执行清单。\n"
+            "必须覆盖：\n"
+            "1) 正常流程（主成功路径）；\n"
+            "2) 异常流程（参数错误、权限不足、外部依赖失败）；\n"
+            "3) 边界条件（空值、重复提交、并发冲突）；\n"
+            "4) 回归测试（与上游依赖和历史缺陷相关场景）；\n"
+            "5) 验收标准（通过条件与关键断言）。"
+        ),
+        "is_fallback": False,
+        "forced_for_p0": True,
     }
 
 
@@ -86,6 +119,10 @@ def _priority_rank(priority: str) -> int:
         "P3": 3,
     }
     return mapping.get(normalized, 2)
+
+
+def _is_p0_task(task: dict) -> bool:
+    return _priority_rank(task.get("priority", "")) == 0
 
 
 def _extract_review_focus_indices(tasks: list[dict], review_report: dict) -> set[int]:
@@ -180,53 +217,99 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
     else:
         agent = None
 
-    for batch_start in range(0, len(build_indices), PROMPT_BUILD_BATCH_SIZE):
-        batch_indices = build_indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
-        missing_tasks = [all_tasks[i] for i in batch_indices]
-        task_summary = summarize_task_breakdown(
-            missing_tasks,
-            max_items=PROMPT_BUILD_BATCH_SIZE,
-        )
-        compact_context = (
-            "请为以下任务生成编码提示词与测试提示词。"
-            "只针对列出的任务生成，避免重复扩写。\n"
-            f"{task_summary}"
-        )
-
-        if is_rework_round:
-            review_feedback = summarize_review_feedback(
-                review_report, max_issues=5, max_suggestions=5
-            )
-            compact_context += (
-                "\n\n[回流修复模式]\n"
-                "上一轮评审未通过。请基于以下评审问题与建议，优先生成能修复这些问题的提示词：\n"
-                f"{review_feedback}\n"
-                "要求：\n"
-                "1) 每条提示词要明确其对应要修复的问题。\n"
-                "2) 测试提示词需包含回归测试要点，覆盖关键issues。\n"
-                "3) 避免无关扩写。"
-            )
-
+    def _generate_indices(indices: list[int], *, p0_retry_mode: bool = False) -> None:
+        nonlocal agent
+        if not indices:
+            return
+        if agent is None:
+            agent = build_prompt_builder_agent()
         assert agent is not None
-        result = agent.invoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": compact_context,
-                    }
-                ]
-            }
-        )
-        structured = extract_structured_response(result)
-        generated_prompt_pack = [item.model_dump() for item in structured.prompts]
-        aligned_generated = _align_prompt_pack_to_tasks(missing_tasks, generated_prompt_pack)
 
-        task_prompt_pairs: list[tuple[dict, dict]] = []
-        for idx, prompt in zip(batch_indices, aligned_generated):
-            prompt_slots[idx] = prompt
-            task_prompt_pairs.append((all_tasks[idx], prompt))
-        save_cached_prompts(project_id, review_rounds, task_prompt_pairs)
+        for batch_start in range(0, len(indices), PROMPT_BUILD_BATCH_SIZE):
+            batch_indices = indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
+            missing_tasks = [all_tasks[i] for i in batch_indices]
+            task_summary = summarize_task_breakdown(
+                missing_tasks,
+                max_items=PROMPT_BUILD_BATCH_SIZE,
+            )
+            compact_context = (
+                "请为以下任务生成编码提示词与测试提示词。"
+                "只针对列出的任务生成，避免重复扩写。\n"
+                f"{task_summary}"
+            )
+
+            if is_rework_round:
+                review_feedback = summarize_review_feedback(
+                    review_report, max_issues=5, max_suggestions=5
+                )
+                compact_context += (
+                    "\n\n[回流修复模式]\n"
+                    "上一轮评审未通过。请基于以下评审问题与建议，优先生成能修复这些问题的提示词：\n"
+                    f"{review_feedback}\n"
+                    "要求：\n"
+                    "1) 每条提示词要明确其对应要修复的问题。\n"
+                    "2) 测试提示词需包含回归测试要点，覆盖关键issues。\n"
+                    "3) 避免无关扩写。"
+                )
+            if p0_retry_mode:
+                compact_context += (
+                    "\n\n[P0兜底重试模式]\n"
+                    "以下均为P0任务。请严格按任务标题一一输出对应prompt，"
+                    "不得缺项、不得改名、不得返回与标题不一致的task_title。"
+                )
+
+            result = agent.invoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": compact_context,
+                        }
+                    ]
+                }
+            )
+            structured = extract_structured_response(result)
+            generated_prompt_pack = [item.model_dump() for item in structured.prompts]
+            aligned_generated = _align_prompt_pack_to_tasks(missing_tasks, generated_prompt_pack)
+
+            task_prompt_pairs: list[tuple[dict, dict]] = []
+            for idx, prompt in zip(batch_indices, aligned_generated):
+                prompt_slots[idx] = prompt
+                task_prompt_pairs.append((all_tasks[idx], prompt))
+            save_cached_prompts(project_id, review_rounds, task_prompt_pairs)
+
+    _generate_indices(build_indices)
+
+    p0_retry_indices = [
+        idx
+        for idx, task in enumerate(all_tasks)
+        if _is_p0_task(task)
+        and (
+            prompt_slots[idx] is None
+            or bool((prompt_slots[idx] or {}).get("is_fallback", False))
+        )
+    ]
+    retry_attempt = 0
+    while p0_retry_indices and retry_attempt < P0_PROMPT_RETRY_MAX_ATTEMPTS:
+        _generate_indices(p0_retry_indices, p0_retry_mode=True)
+        p0_retry_indices = [
+            idx
+            for idx, task in enumerate(all_tasks)
+            if _is_p0_task(task)
+            and (
+                prompt_slots[idx] is None
+                or bool((prompt_slots[idx] or {}).get("is_fallback", False))
+            )
+        ]
+        retry_attempt += 1
+
+    if p0_retry_indices:
+        forced_pairs: list[tuple[dict, dict]] = []
+        for idx in p0_retry_indices:
+            forced_prompt = _build_forced_p0_prompt(all_tasks[idx])
+            prompt_slots[idx] = forced_prompt
+            forced_pairs.append((all_tasks[idx], forced_prompt))
+        save_cached_prompts(project_id, review_rounds, forced_pairs)
 
     prompt_pack: list[dict] = []
     for idx, task in enumerate(all_tasks):

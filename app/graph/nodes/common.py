@@ -102,6 +102,10 @@ def _extract_issue_focus_phrase(issue: str) -> str | None:
         r"缺少([^，。；\n]{2,80})任务",
         r"未包含([^，。；\n]{2,80})任务",
         r"新增任务[:：]\s*([^，。；\n]{2,80})",
+        r"需求明确要求['‘“\"]([^'’”\"]{2,80})['’”\"]功能",
+        r"未见([^，。；\n]{2,80})相关任务",
+        r"未见([^，。；\n]{2,80})开发任务",
+        r"未明确包含([^，。；\n]{2,80})逻辑",
     ]
     text = _normalize_text(issue)
     for pattern in patterns:
@@ -109,6 +113,9 @@ def _extract_issue_focus_phrase(issue: str) -> str | None:
         if m:
             phrase = _normalize_text(m.group(1))
             phrase = re.sub(r"^的", "", phrase).strip()
+            phrase = phrase.strip("'\"‘’“”`")
+            phrase = re.sub(r"[（(].*?[)）]$", "", phrase).strip()
+            phrase = re.sub(r"(相关任务|开发任务|任务)$", "", phrase).strip()
             return phrase if phrase else None
     return None
 
@@ -142,6 +149,10 @@ def _extract_issue_terms(issue: str, max_terms: int = 4) -> list[str]:
         if len(terms) >= max_terms:
             break
     return terms
+
+
+def _tokenize_text(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", _normalize_text(text))
 
 
 _COVERAGE_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
@@ -184,23 +195,144 @@ def _is_issue_covered_by_task(issue: str, task_text: str) -> bool:
     return sum(1 for term in terms if term in task_text) >= threshold
 
 
+def _extract_issue_focus(issue: str) -> tuple[str, float]:
+    phrase = _extract_issue_focus_phrase(issue)
+    if phrase:
+        return phrase, 0.9
+
+    terms = _extract_issue_terms(issue, max_terms=3)
+    if terms:
+        return " ".join(terms[:2]), 0.6
+    return "", 0.4
+
+
+def _build_evidence_sources(
+    tasks: list[dict[str, Any]],
+    prompt_pack: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    task_titles = " ".join(str(item.get("title", "")) for item in (tasks or []))
+    task_descriptions = " ".join(
+        str(item.get("description", "")) for item in (tasks or [])
+    )
+    depends_on = " ".join(
+        " ".join(str(dep) for dep in (item.get("depends_on", []) or []))
+        for item in (tasks or [])
+    )
+    prompts = prompt_pack or []
+    prompt_task_titles = " ".join(str(item.get("task_title", "")) for item in prompts)
+    prompt_content = " ".join(
+        f"{item.get('coding_prompt', '')} {item.get('test_prompt', '')}" for item in prompts
+    )
+    return {
+        "task_title": _normalize_text(task_titles),
+        "task_description": _normalize_text(task_descriptions),
+        "prompt_task_title": _normalize_text(prompt_task_titles),
+        "prompt_content": _normalize_text(prompt_content),
+        "depends_on": _normalize_text(depends_on),
+    }
+
+
+def _source_hit(
+    capability: str,
+    issue_terms: list[str],
+    source_text: str,
+) -> bool:
+    if not source_text:
+        return False
+    if capability and capability in source_text:
+        return True
+    if not issue_terms:
+        return False
+    threshold = min(2, len(issue_terms))
+    return sum(1 for term in issue_terms if term in source_text) >= threshold
+
+
+def analyze_blocking_issue_coverage(
+    tasks: list[dict[str, Any]],
+    blocking_issues: list[str],
+    *,
+    prompt_pack: list[dict[str, Any]] | None = None,
+    min_evidence_hits: int = 2,
+    min_confidence: float = 0.65,
+    blocking_confidence: float = 0.75,
+) -> dict[str, Any]:
+    sources = _build_evidence_sources(tasks, prompt_pack=prompt_pack)
+    source_weights = {
+        "task_title": 0.30,
+        "task_description": 0.22,
+        "prompt_task_title": 0.20,
+        "prompt_content": 0.18,
+        "depends_on": 0.10,
+    }
+
+    uncovered: list[str] = []
+    downgraded: list[str] = []
+    diagnostics: list[dict[str, Any]] = []
+
+    for issue in blocking_issues:
+        issue_text = str(issue)
+        capability, parse_confidence = _extract_issue_focus(issue_text)
+        issue_terms = _extract_issue_terms(issue_text, max_terms=5)
+        if capability:
+            issue_terms = list(dict.fromkeys(_tokenize_text(capability) + issue_terms))
+
+        matched_sources: list[str] = []
+        for source_name, source_text in sources.items():
+            if _source_hit(capability, issue_terms, source_text):
+                matched_sources.append(source_name)
+
+        evidence_hits = len(matched_sources)
+        coverage_confidence = sum(source_weights[name] for name in matched_sources)
+        is_covered = (
+            evidence_hits >= max(1, int(min_evidence_hits))
+            and coverage_confidence >= float(min_confidence)
+        )
+
+        missing_confidence = parse_confidence * max(0.2, 1.0 - coverage_confidence)
+        if is_covered:
+            decision = "covered"
+        elif missing_confidence >= float(blocking_confidence):
+            decision = "blocking_uncovered"
+            uncovered.append(issue_text)
+        else:
+            decision = "downgraded_uncovered"
+            downgraded.append(issue_text)
+
+        diagnostics.append(
+            {
+                "issue_text": issue_text,
+                "missing_capability": capability,
+                "issue_terms": issue_terms[:6],
+                "evidence_checked": list(sources.keys()),
+                "matched_evidence": matched_sources,
+                "evidence_hits": evidence_hits,
+                "coverage_confidence": round(coverage_confidence, 3),
+                "missing_confidence": round(missing_confidence, 3),
+                "is_blocking": decision == "blocking_uncovered",
+                "decision": decision,
+                "why_not_matched": ""
+                if matched_sources
+                else "no sufficient cross-source evidence",
+            }
+        )
+
+    return {
+        "uncovered": uncovered,
+        "downgraded": downgraded,
+        "diagnostics": diagnostics,
+    }
+
+
 def find_uncovered_blocking_issues(
     tasks: list[dict[str, Any]],
     blocking_issues: list[str],
 ) -> list[str]:
-    task_texts = [
-        _normalize_text(f"{item.get('title', '')} {item.get('description', '')}")
-        for item in (tasks or [])
-    ]
-    uncovered: list[str] = []
-    for issue in blocking_issues:
-        focus_phrase = _extract_issue_focus_phrase(issue)
-        if focus_phrase:
-            if any(focus_phrase in t for t in task_texts):
-                continue
-            uncovered.append(issue)
-            continue
-
-        if not any(_is_issue_covered_by_task(issue, text) for text in task_texts):
-            uncovered.append(issue)
-    return uncovered
+    analysis = analyze_blocking_issue_coverage(
+        tasks,
+        blocking_issues,
+        prompt_pack=None,
+        min_evidence_hits=1,
+        min_confidence=0.5,
+        blocking_confidence=0.5,
+    )
+    return [str(item) for item in (analysis.get("uncovered", []) or [])]

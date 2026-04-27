@@ -1,9 +1,9 @@
 from app.agents.reviewer_agent import build_reviewer_agent
 from app.config import settings
 from app.graph.nodes.common import (
+    analyze_blocking_issue_coverage,
     extract_blocking_issues,
     extract_structured_response,
-    find_uncovered_blocking_issues,
     summarize_key_list,
     summarize_prompt_pack,
     summarize_review_feedback,
@@ -319,6 +319,7 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     tasks = state.get("task_breakdown", [])
     prompts = state.get("prompt_pack", [])
     review_rounds = int(state.get("review_rounds", 0) or 0)
+    max_review_rounds = int(state.get("max_review_rounds", settings.review_max_rounds))
     previous_review = state.get("review_report", {}) or {}
 
     assumption_review = _build_assumption_pack_review(
@@ -335,20 +336,46 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     # Gate before reviewer LLM call:
     # key blocking issues from previous review must be covered by current tasks.
     is_rework_round = review_rounds > 0 and not bool(previous_review.get("passed"))
+    if is_rework_round and (review_rounds + 1) >= max_review_rounds:
+        conditional_pass = _build_conditional_pass_if_possible(state, previous_review)
+        if conditional_pass is not None:
+            return {
+                **state,
+                "review_report": conditional_pass,
+                "review_rounds": review_rounds + 1,
+                "next_step": "finish",
+            }
+
     if is_rework_round:
         blocking_issues = extract_blocking_issues(previous_review, max_items=8)
-        uncovered = find_uncovered_blocking_issues(tasks, blocking_issues)
+        coverage_analysis = analyze_blocking_issue_coverage(
+            tasks,
+            blocking_issues,
+            prompt_pack=prompts,
+            min_evidence_hits=settings.coverage_min_evidence_hits,
+            min_confidence=settings.coverage_min_confidence,
+            blocking_confidence=settings.coverage_blocking_confidence,
+        )
+        uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
+        downgraded = [str(item) for item in (coverage_analysis.get("downgraded", []) or [])]
         if uncovered:
+            suggestions = [
+                "请先补齐上述阻塞项对应任务，再进入评审。",
+                "建议在任务标题中显式包含阻塞项关键词，并补充依赖关系与验收标准。",
+            ]
+            if downgraded:
+                suggestions.append(
+                    "以下问题因证据置信度不足已降级为建议，请结合diagnostics复核："
+                    + "；".join(downgraded[:3])
+                )
             review_report = {
                 "passed": False,
                 "issues": [
                     "回流覆盖检查未通过：以下关键阻塞项尚未被任务清单命中。"
                 ]
                 + uncovered,
-                "suggestions": [
-                    "请先补齐上述阻塞项对应任务，再进入评审。",
-                    "建议在任务标题中显式包含阻塞项关键词，并补充依赖关系与验收标准。",
-                ],
+                "suggestions": suggestions,
+                "diagnostics": coverage_analysis.get("diagnostics", []),
             }
             return _apply_review_outcome(state, review_report, passed=False)
 
