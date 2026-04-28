@@ -38,6 +38,21 @@ class FakePassingReviewerAgent:
         }
 
 
+class FakeManyP0PlannerAgent:
+    def invoke(self, _payload):
+        tasks = [
+            TaskItem(
+                title=f"P0任务{i}",
+                description=f"高优先任务{i}",
+                priority="P0",
+                depends_on=[],
+                owner_role="后端",
+            )
+            for i in range(1, 16)
+        ]
+        return {"structured_response": PlannerOutput(tasks=tasks)}
+
+
 def test_planner_adds_assumption_tasks_and_excludes_deferred_scope(monkeypatch):
     monkeypatch.setattr(
         "app.graph.nodes.planner.build_planner_agent",
@@ -86,6 +101,48 @@ def test_planner_adds_assumption_tasks_and_excludes_deferred_scope(monkeypatch):
     assert "落实受控假设的风险控制措施" in titles
     assert "上线前确认清单与决策复核" in titles
     assert "高级分析报表" not in all_text
+
+
+def test_planner_keeps_assumption_anchor_tasks_under_budget_trimming(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakeManyP0PlannerAgent(),
+    )
+    state = {
+        "requirement_doc": {"summary": "业务系统", "constraints": []},
+        "feasibility_report": {"complexity": "low", "risks": []},
+        "architecture_plan": {
+            "architecture_style": "模块化单体",
+            "backend": ["Python"],
+            "frontend": ["Vue"],
+            "modules": [],
+        },
+        "assumption_pack": {
+            "human_gate_exhausted": True,
+            "unresolved_missing_info": ["外部服务接口服务等级未明确"],
+            "blocking": [],
+            "assumptions": [{"source": "外部服务接口服务等级未明确"}],
+            "risk_controls": [{"missing_info": "外部服务接口服务等级未明确"}],
+            "scope_reductions": [
+                {
+                    "missing_info": "核心外部依赖协议未明确",
+                    "action": "范围收缩并采用替代方案。",
+                }
+            ],
+            "deferred_scope": [],
+            "requires_user_confirmation": [{"item": "外部服务接口服务等级未明确"}],
+        },
+        "review_report": {},
+        "review_rounds": 0,
+        "project_decisions": {},
+    }
+
+    result = planner_node(state)
+    titles = [item["title"] for item in result["task_breakdown"]]
+    assert "验证关键假设与替代方案" in titles
+    assert "落实受控假设的风险控制措施" in titles
+    assert "上线前确认清单与决策复核" in titles
+    assert "确认范围收缩与替代方案边界" in titles
 
 
 def test_reviewer_blocks_uncontrolled_assumption_pack(monkeypatch):

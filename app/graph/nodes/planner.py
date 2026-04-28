@@ -215,14 +215,26 @@ def _trim_tasks_by_budget(
 
     normalized = [dict(task) for task in tasks]
     indexed = list(enumerate(normalized))
+    assumption_anchor_titles = {
+        "验证关键假设与替代方案",
+        "落实受控假设的风险控制措施",
+        "上线前确认清单与决策复核",
+        "确认范围收缩与替代方案边界",
+    }
 
     def _task_text(task: dict) -> str:
         return f"{task.get('title', '')} {task.get('description', '')}"
 
     must_keep_indices: set[int] = set()
+    anchor_indices: set[int] = set()
     for idx, task in indexed:
         priority = _priority_rank(str(task.get("priority", "")))
         text = _task_text(task)
+        title = str(task.get("title", "")).strip()
+        if title in assumption_anchor_titles:
+            must_keep_indices.add(idx)
+            anchor_indices.add(idx)
+            continue
         # Review backflow tasks should survive budget trimming,
         # otherwise we may lose just-added remediation items.
         if "基于评审回流补齐" in str(task.get("description", "")):
@@ -236,8 +248,13 @@ def _trim_tasks_by_budget(
 
     sorted_indices = sorted(
         range(len(normalized)),
-        key=lambda i: (_priority_rank(str(normalized[i].get("priority", ""))), i),
+        key=lambda i: (
+            0 if i in anchor_indices else 1,
+            _priority_rank(str(normalized[i].get("priority", ""))),
+            i,
+        ),
     )
+    effective_budget = max(int(budget), len(must_keep_indices))
     selected_indices: list[int] = []
     for idx in sorted_indices:
         if idx in must_keep_indices:
@@ -246,10 +263,10 @@ def _trim_tasks_by_budget(
         if idx in selected_indices:
             continue
         selected_indices.append(idx)
-        if len(selected_indices) >= budget:
+        if len(selected_indices) >= effective_budget:
             break
 
-    selected_indices = selected_indices[:budget]
+    selected_indices = selected_indices[:effective_budget]
     selected = [normalized[idx] for idx in sorted(selected_indices)]
     selected_titles = {
         str(item.get("title", "")).strip() for item in selected if str(item.get("title", "")).strip()
