@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.graph.nodes.common import detect_dependency_cycles
+
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
     normalized = text.lower()
@@ -139,3 +141,90 @@ def resolve_task_dependencies(tasks: list[dict]) -> list[dict]:
             task["depends_on"] = []
 
     return resolved
+
+
+def break_dependency_cycles(tasks: list[dict]) -> tuple[list[dict], dict]:
+    """
+    Remove dependency edges heuristically until task graph becomes acyclic.
+    Returns (fixed_tasks, diagnostics).
+    """
+    fixed = [dict(task) for task in tasks]
+    by_title = {
+        str(task.get("title", "")).strip(): task
+        for task in fixed
+        if str(task.get("title", "")).strip()
+    }
+    removed_edges: list[dict[str, str]] = []
+
+    def _task_text_by_title(title: str) -> str:
+        task = by_title.get(title, {})
+        return f"{task.get('title', '')} {task.get('description', '')}"
+
+    def _is_validation_or_integration(title: str) -> bool:
+        text = _task_text_by_title(title)
+        return _contains_any(text, ("测试", "压测", "集成", "验收", "验证", "回归"))
+
+    def _is_foundation_or_scaffold(title: str) -> bool:
+        text = _task_text_by_title(title)
+        return _contains_any(text, ("脚手架", "初始化", "基础配置", "schema", "表结构", "数据库"))
+
+    def _is_core_implementation(title: str) -> bool:
+        text = _task_text_by_title(title)
+        return _contains_any(text, ("实现", "引擎", "核心", "crud", "流程"))
+
+    def _edge_rank(src: str, dep: str) -> tuple[int, int, int, int]:
+        # lower rank => remove first
+        src_validation = 0 if _is_validation_or_integration(src) else 1
+        dep_validation = 0 if _is_validation_or_integration(dep) else 1
+        src_foundation = 0 if _is_foundation_or_scaffold(src) else 1
+        dep_core = 0 if _is_core_implementation(dep) else 1
+        return (src_validation, dep_validation, src_foundation, dep_core)
+
+    before = detect_dependency_cycles(fixed)
+    guard = 0
+    while True:
+        analysis = detect_dependency_cycles(fixed)
+        cycles = analysis.get("cycles", []) or []
+        if not cycles:
+            break
+        guard += 1
+        if guard > 50:
+            break
+
+        chosen_src = ""
+        chosen_dep = ""
+        chosen_rank = (9, 9, 9, 9)
+        for cycle in cycles:
+            nodes = [str(n).strip() for n in cycle if str(n).strip()]
+            if len(nodes) < 2:
+                continue
+            for i in range(len(nodes) - 1):
+                src = nodes[i]
+                dep = nodes[i + 1]
+                rank = _edge_rank(src, dep)
+                if rank < chosen_rank:
+                    chosen_rank = rank
+                    chosen_src = src
+                    chosen_dep = dep
+        if not chosen_src or not chosen_dep:
+            break
+
+        src_task = by_title.get(chosen_src)
+        if not src_task:
+            break
+        deps = [str(item).strip() for item in (src_task.get("depends_on", []) or []) if str(item).strip()]
+        new_deps = [item for item in deps if item != chosen_dep]
+        if len(new_deps) == len(deps):
+            break
+        src_task["depends_on"] = new_deps
+        removed_edges.append({"from": chosen_src, "to": chosen_dep})
+
+    after = detect_dependency_cycles(fixed)
+    diagnostics = {
+        "had_cycles_before": bool(before.get("has_cycle")),
+        "cycles_before": (before.get("cycles", []) or [])[:5],
+        "cycles_after": (after.get("cycles", []) or [])[:5],
+        "has_cycle_after": bool(after.get("has_cycle")),
+        "removed_edges": removed_edges,
+    }
+    return fixed, diagnostics

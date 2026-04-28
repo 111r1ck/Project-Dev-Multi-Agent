@@ -17,6 +17,7 @@ from app.services.planning_guardrails import (
     ensure_risk_mitigation_tasks,
 )
 from app.services.task_dependency_resolver import resolve_task_dependencies
+from app.services.task_dependency_resolver import break_dependency_cycles
 
 
 def _normalize_text(text: str) -> str:
@@ -290,6 +291,8 @@ def planner_node(state: ProjectState) -> ProjectState:
         )
     compact_context = (
         "请基于以下摘要拆分任务。\n"
+        "依赖约束：depends_on 只能指向前置能力任务，禁止形成循环依赖。\n"
+        "禁止将测试/压测/集成/验收任务作为基础开发或基础设施任务的前置依赖。\n"
         f"需求摘要: {req.get('summary', '')}\n"
         f"关键约束: {summarize_key_list(req.get('constraints', []), max_items=10, max_chars=1200)}\n"
         f"关键风险: {summarize_key_list(fea.get('risks', []), max_items=8, max_chars=1000)}\n"
@@ -355,6 +358,7 @@ def planner_node(state: ProjectState) -> ProjectState:
     )
     tasks = _apply_review_task_updates(tasks, review_report)
     tasks = resolve_task_dependencies(tasks)
+    tasks, dependency_diagnostics = break_dependency_cycles(tasks)
     tasks = align_dependency_priorities(tasks)
     budget = _task_budget_from_complexity(fea.get("complexity", ""))
     if is_rework_round and previous_tasks_count > 0:
@@ -368,5 +372,6 @@ def planner_node(state: ProjectState) -> ProjectState:
     return {
         **state,
         "task_breakdown": tasks,
+        "task_dependency_diagnostics": dependency_diagnostics,
         "next_step": "prompt_builder",
     }

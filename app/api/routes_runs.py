@@ -92,6 +92,15 @@ def _snapshot_has_pending_interrupt(snapshot: Any) -> bool:
     return False
 
 
+def _extract_pending_interrupts_from_snapshot(snapshot: Any) -> list[Any]:
+    pending: list[Any] = []
+    tasks = getattr(snapshot, "tasks", ()) or ()
+    for task in tasks:
+        for item in getattr(task, "interrupts", ()) or ():
+            pending.append(_serialize_interrupt(item))
+    return pending
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -289,6 +298,7 @@ async def get_project_run_state(
     config = {"configurable": {"thread_id": project_id}}
     snapshot = await run_in_threadpool(compiled_graph.get_state, config)
     state = _serialize_snapshot(snapshot)
+    pending_interrupts = _extract_pending_interrupts_from_snapshot(snapshot)
     with _CONTINUE_JOBS_LOCK:
         continue_status = dict(_CONTINUE_JOB_STATUS.get(project_id, {}))
         running_job = _CONTINUE_JOBS.get(project_id)
@@ -300,6 +310,9 @@ async def get_project_run_state(
         "created_at": state["created_at"],
         "checkpoint_id": state["checkpoint_id"],
         "metadata": state["metadata"],
+        "tasks": state["tasks"],
+        "has_pending_interrupt": bool(pending_interrupts),
+        "pending_interrupts": pending_interrupts,
         "continue_status": continue_status,
         "continue_alive": continue_alive,
     }

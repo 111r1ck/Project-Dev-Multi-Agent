@@ -1247,6 +1247,8 @@
           continue_started_at: continueStatus.started_at || null,
           continue_finished_at: continueStatus.finished_at || null,
           continue_latest_checkpoint_id: continueStatus.latest_checkpoint_id || null,
+          has_pending_interrupt: !!data.has_pending_interrupt,
+          pending_interrupt_count: Array.isArray(data.pending_interrupts) ? data.pending_interrupts.length : 0,
           has_values: !!(data.values && Object.keys(data.values).length),
           values_keys: data.values ? Object.keys(data.values) : []
         };
@@ -1376,14 +1378,14 @@
         }
 
         if (Array.isArray(snapshot.next) && snapshot.next.length > 0) {
-          const stateInterrupts = Array.isArray(values.__interrupt__) ? values.__interrupt__ : [];
+          const stateInterrupts = Array.isArray(snapshot.pending_interrupts)
+            ? snapshot.pending_interrupts
+            : (Array.isArray(values.__interrupt__) ? values.__interrupt__ : []);
           if (stateInterrupts.length > 0) {
             setResult({
               project_id: snapshot.project_id,
               status: "interrupted",
-              interrupts: stateInterrupts.map((item) =>
-                item && typeof item === "object" && "value" in item ? item.value : item
-              ),
+              interrupts: stateInterrupts.map((item) => item && typeof item === "object" && "value" in item ? item.value : item),
               state: values,
               source: "state_snapshot"
             });
@@ -1415,7 +1417,8 @@
           const snapshot = await callApi("/runs/" + encodedProjectId + "/state");
           const values = snapshot && snapshot.values ? snapshot.values : {};
           const next = Array.isArray(snapshot.next) ? snapshot.next : [];
-          const hasInterrupt = Array.isArray(values.__interrupt__) && values.__interrupt__.length > 0;
+          const hasInterrupt = (Array.isArray(snapshot.pending_interrupts) && snapshot.pending_interrupts.length > 0)
+            || (Array.isArray(values.__interrupt__) && values.__interrupt__.length > 0);
           if (hasInterrupt || (next.length === 0 && hasCompletedArtifacts(values))) {
             break;
           }

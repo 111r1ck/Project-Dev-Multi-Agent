@@ -225,6 +225,12 @@ def _is_dependency_timing_issue_text(issue: str) -> bool:
     markers = (
         "时机错误",
         "依赖项错误",
+        "依赖关系",
+        "依赖链",
+        "阻塞核心开发",
+        "被阻塞",
+        "导致延迟",
+        "延后",
         "应依赖",
         "应该依赖",
         "需依赖",
@@ -234,6 +240,49 @@ def _is_dependency_timing_issue_text(issue: str) -> bool:
         "后置",
     )
     return any(marker in text for marker in markers)
+
+
+def _render_cycle_issue(cycle: list[str]) -> str:
+    cleaned = [str(node).strip() for node in (cycle or []) if str(node).strip()]
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1]:
+        chain = cleaned
+    else:
+        chain = cleaned + ([cleaned[0]] if cleaned else [])
+    if not chain:
+        return "【循环依赖-阻塞】检测到任务依赖环，请解除至少一条依赖边。"
+    return (
+        "【循环依赖-阻塞】检测到循环依赖链："
+        + " → ".join(chain)
+        + "。请解除至少一条依赖边。"
+    )
+
+
+def _cycle_claim_alignment(issue: str, cycles: list[list[str]]) -> dict:
+    claim_nodes = [item for item in _extract_quoted_phrases(issue) if item]
+    if not claim_nodes:
+        return {
+            "claim_nodes": [],
+            "aligned": False,
+            "best_overlap": 0,
+            "best_cycle": [],
+        }
+    claim_set = set(claim_nodes)
+    best_overlap = 0
+    best_cycle: list[str] = []
+    for cycle in cycles or []:
+        cycle_nodes = [str(node).strip() for node in (cycle or []) if str(node).strip()]
+        cycle_set = set(cycle_nodes)
+        overlap = len(claim_set & cycle_set)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_cycle = cycle_nodes
+    aligned = best_overlap >= max(1, min(2, len(claim_set)))
+    return {
+        "claim_nodes": claim_nodes,
+        "aligned": aligned,
+        "best_overlap": best_overlap,
+        "best_cycle": best_cycle,
+    }
 
 
 _POSTPROCESS_STOP_WORDS: set[str] = {
@@ -494,6 +543,33 @@ def _issue_suggestion_has_contradiction_evidence(
     return False
 
 
+def _is_performance_data_sufficiency_issue(issue: str) -> bool:
+    text = str(issue or "").lower()
+    perf_markers = ("性能", "压测", "基准", "p95", "p99", "qps", "延迟", "吞吐")
+    data_markers = ("真实数据", "数据量", "样本", "元数据", "验证", "支撑")
+    return any(m in text for m in perf_markers) and any(m in text for m in data_markers)
+
+
+def _has_performance_validation_spec(tasks: list[dict], prompts: list[dict]) -> bool:
+    corpus = " ".join(
+        [
+            " ".join(
+                f"{str(item.get('title', ''))} {str(item.get('description', ''))}" for item in (tasks or [])
+            ),
+            " ".join(
+                f"{str(item.get('task_title', ''))} {str(item.get('coding_prompt', ''))} {str(item.get('test_prompt', ''))}"
+                for item in (prompts or [])
+            ),
+        ]
+    ).lower()
+    has_metric = any(marker in corpus for marker in ("p95", "p99", "qps", "延迟", "吞吐", "性能"))
+    has_threshold = any(marker in corpus for marker in ("<=", "≥", ">=", "ms", "秒", "qps"))
+    has_data_scale = bool(re.search(r"\d+\s*(万|千|百万|亿|条|份|gb|mb|k)", corpus))
+    has_data_source = any(marker in corpus for marker in ("真实数据", "样本", "脱敏", "合成", "迁移", "元数据"))
+    hits = sum([has_metric, has_threshold, has_data_scale, has_data_source])
+    return has_metric and hits >= 3
+
+
 def _postprocess_review_report_with_evidence(
     *,
     tasks: list[dict],
@@ -526,9 +602,13 @@ def _postprocess_review_report_with_evidence(
 
     kept_issues: list[str] = []
     downgraded_issues: list[str] = []
+    explicit_downgraded: set[str] = set()
+    cycle_issue_seen = False
+    rendered_cycle_issues: list[str] = []
     for issue in issues:
         if _issue_is_research_timing_dispute(issue, tasks):
             downgraded_issues.append(issue)
+            explicit_downgraded.add(issue)
             post_diagnostics.append(
                 {
                     "issue_text": issue,
@@ -540,19 +620,35 @@ def _postprocess_review_report_with_evidence(
             continue
 
         if _is_dependency_cycle_issue_text(issue):
+            cycle_issue_seen = True
             if dependency_check.get("has_cycle"):
-                kept_issues.append(issue)
+                cycles = dependency_check.get("cycles", []) or []
+                alignment = _cycle_claim_alignment(issue, cycles)
+                if not alignment.get("aligned"):
+                    downgraded_issues.append(issue)
+                    explicit_downgraded.add(issue)
+                    suggestions.append(
+                        "【循环依赖说明已重写】原评审链条与结构化依赖图不一致，已按真实环路重写阻塞问题。"
+                    )
+                rendered_cycle_issues = [
+                    _render_cycle_issue(cycle) for cycle in cycles[:3] if isinstance(cycle, list)
+                ] or ["【循环依赖-阻塞】检测到任务依赖环，请解除至少一条依赖边。"]
                 post_diagnostics.append(
                     {
                         "issue_text": issue,
                         "issue_type": "dependency_cycle",
                         "decision": "blocking_cycle_confirmed",
                         "has_cycle": True,
-                        "cycles": dependency_check.get("cycles", [])[:3],
+                        "cycles": cycles[:3],
+                        "claim_nodes": alignment.get("claim_nodes", []),
+                        "claim_aligned": alignment.get("aligned", False),
+                        "best_overlap": alignment.get("best_overlap", 0),
+                        "best_cycle": alignment.get("best_cycle", []),
                     }
                 )
             else:
                 downgraded_issues.append(issue)
+                explicit_downgraded.add(issue)
                 post_diagnostics.append(
                     {
                         "issue_text": issue,
@@ -561,6 +657,32 @@ def _postprocess_review_report_with_evidence(
                         "has_cycle": False,
                     }
                 )
+            continue
+
+        if _is_dependency_timing_issue_text(issue):
+            downgraded_issues.append(issue)
+            explicit_downgraded.add(issue)
+            post_diagnostics.append(
+                {
+                    "issue_text": issue,
+                    "issue_type": "dependency_timing",
+                    "decision": "downgraded_dependency_timing",
+                    "reason": "dependency_timing_dispute_should_not_block_without_structural_cycle",
+                }
+            )
+            continue
+
+        if _is_performance_data_sufficiency_issue(issue) and _has_performance_validation_spec(tasks, prompts):
+            downgraded_issues.append(issue)
+            explicit_downgraded.add(issue)
+            post_diagnostics.append(
+                {
+                    "issue_text": issue,
+                    "issue_type": "performance_validation",
+                    "decision": "downgraded_perf_data_sufficient",
+                    "reason": "performance_spec_contains_metric_threshold_and_data_scale",
+                }
+            )
             continue
 
         if _issue_claims_missing_but_present(
@@ -612,6 +734,7 @@ def _postprocess_review_report_with_evidence(
         )
         if (
             _is_hard_blocking_issue_text(issue)
+            and not _is_dependency_timing_issue_text(issue)
             and decision == "downgraded_uncovered"
             and (low_signal_uncovered or weak_single_source_uncovered)
         ):
@@ -619,10 +742,47 @@ def _postprocess_review_report_with_evidence(
         else:
             downgraded_issues.append(issue)
 
+    if cycle_issue_seen and dependency_check.get("has_cycle"):
+        for item in rendered_cycle_issues:
+            if item and item not in kept_issues:
+                kept_issues.append(item)
+
     if downgraded_issues:
         suggestions.extend(
             [f"【已降级为建议（证据已覆盖或置信度不足）】{item}" for item in downgraded_issues]
         )
+
+    # Final consistency guard:
+    # Any diagnostics marked as blocking_uncovered must remain in issues unless explicitly downgraded by typed rules.
+    blocking_diag_issues = {
+        str(item.get("issue_text", "")).strip()
+        for item in diagnostics
+        if isinstance(item, dict) and str(item.get("decision", "")) == "blocking_uncovered"
+    }
+    for issue in blocking_diag_issues:
+        if not issue or issue in explicit_downgraded:
+            continue
+        if issue not in kept_issues:
+            kept_issues.append(issue)
+        if issue in downgraded_issues:
+            downgraded_issues = [item for item in downgraded_issues if item != issue]
+        post_diagnostics.append(
+            {
+                "issue_text": issue,
+                "issue_type": "consistency_guard",
+                "decision": "forced_restore_blocking",
+                "reason": "blocking_uncovered_must_remain_in_issues",
+            }
+        )
+
+    # Safety cleanup: downgraded suggestion prefix must never appear in issues.
+    cleaned_issues: list[str] = []
+    for item in kept_issues:
+        if item.startswith("【已降级为建议"):
+            suggestions.append(item)
+            continue
+        cleaned_issues.append(item)
+    kept_issues = cleaned_issues
 
     normalized["issues"] = kept_issues
     normalized["suggestions"] = suggestions

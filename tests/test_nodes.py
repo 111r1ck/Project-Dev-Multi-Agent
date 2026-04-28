@@ -1346,3 +1346,97 @@ def test_reviewer_postprocess_downgrades_research_timing_dispute(monkeypatch):
     assert result["review_report"]["passed"] is True
     assert result["review_report"]["issues"] == []
     assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])
+
+
+def test_reviewer_consistency_guard_restores_blocking_uncovered(monkeypatch):
+    class BlockingIssueReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=["【关键功能缺失】缺少核心对账校验任务。"],
+                    suggestions=[],
+                )
+            }
+
+    def fake_coverage(_tasks, issues, **_kwargs):
+        return {
+            "uncovered": [],
+            "downgraded": list(issues),
+            "diagnostics": [
+                {
+                    "issue_text": "【关键功能缺失】缺少核心对账校验任务。",
+                    "decision": "blocking_uncovered",
+                    "is_blocking": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.graph.nodes.reviewer.analyze_blocking_issue_coverage", fake_coverage)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: BlockingIssueReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [{"title": "基础任务", "description": "desc", "priority": "P1", "depends_on": []}],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "planner"
+    assert result["review_report"]["passed"] is False
+    assert "【关键功能缺失】缺少核心对账校验任务。" in result["review_report"]["issues"]
+
+
+def test_reviewer_downgrades_performance_data_sufficiency_issue(monkeypatch):
+    class PerfIssueReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【性能验证-阻塞】全文检索性能基准测试缺少真实数据支撑，当前依赖关系无法保证性能测试有效性。"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: PerfIssueReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "检索系统", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "全文检索索引优化与性能基准测试",
+                "description": "使用30万合同样本数据集，验证P95<=800ms、P99<=1500ms并输出QPS基线。",
+                "priority": "P0",
+                "depends_on": [],
+            }
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])

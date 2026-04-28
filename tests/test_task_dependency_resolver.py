@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.services.task_dependency_resolver import resolve_task_dependencies
+from app.services.task_dependency_resolver import break_dependency_cycles, resolve_task_dependencies
 
 
 def test_resolver_links_alert_work_order_to_alert_generation():
@@ -129,3 +129,36 @@ def test_dependency_resolver_has_no_single_scenario_channel_markers():
     scenario_markers = ("\u4f01\u5fae", "\u7ad9\u5185\u4fe1")
 
     assert all(marker not in source for marker in scenario_markers)
+
+
+def test_break_dependency_cycles_removes_cycle_edges():
+    tasks = [
+        {
+            "title": "集成MinIO对象存储服务",
+            "description": "部署对象存储并提供上传下载能力。",
+            "priority": "P0",
+            "depends_on": ["集成测试与性能压测"],
+            "owner_role": "后端",
+        },
+        {
+            "title": "集成测试与性能压测",
+            "description": "执行集成测试与压测。",
+            "priority": "P0",
+            "depends_on": ["存量合同数据迁移"],
+            "owner_role": "测试",
+        },
+        {
+            "title": "存量合同数据迁移",
+            "description": "迁移历史数据并验证完整性。",
+            "priority": "P0",
+            "depends_on": ["集成MinIO对象存储服务"],
+            "owner_role": "后端",
+        },
+    ]
+
+    fixed, diagnostics = break_dependency_cycles(tasks)
+    assert diagnostics["had_cycles_before"] is True
+    assert diagnostics["has_cycle_after"] is False
+    assert diagnostics["removed_edges"]
+    by_title = {item["title"]: item for item in fixed}
+    assert "集成测试与性能压测" not in by_title["集成MinIO对象存储服务"]["depends_on"]
