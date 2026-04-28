@@ -1145,3 +1145,204 @@ def test_reviewer_postprocess_downgrades_contradictory_issue_to_suggestion(monke
     assert result["review_report"]["passed"] is True
     assert result["review_report"]["issues"] == []
     assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])
+
+
+def test_reviewer_postprocess_downgrades_missing_claim_when_task_exists(monkeypatch):
+    class ContradictoryMissingClaimReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【关键功能缺失】需求明确要求'部门维度报表导出'，但任务列表中未发现报表开发相关任务，核心功能缺失将导致无法验收",
+                        "【审计合规风险】需求要求'敏感操作日志需保留至少6个月'，但任务列表中未发现操作日志审计模块的开发任务，存在合规性风险",
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: ContradictoryMissingClaimReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "企业固定资产借用与盘点系统", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "前端报表中心页面开发",
+                "description": "开发报表中心页面，展示部门维度资产统计数据并实现报表导出功能。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "实现部门维度报表与导出功能",
+                "description": "开发按部门维度统计并提供Excel报表导出能力。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "实现操作日志审计模块",
+                "description": "记录关键业务操作并确保日志数据保留至少6个月。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+        ],
+        "prompt_pack": [
+            {
+                "task_title": "实现部门维度报表与导出功能",
+                "coding_prompt": "实现部门维度报表查询和导出。",
+                "test_prompt": "覆盖导出与筛选路径。",
+            },
+            {
+                "task_title": "实现操作日志审计模块",
+                "coding_prompt": "实现审计日志记录和保留策略。",
+                "test_prompt": "覆盖日志留存与归档场景。",
+            },
+        ],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    assert len(result["review_report"]["suggestions"]) >= 2
+
+
+def test_reviewer_postprocess_downgrades_cycle_issue_when_graph_has_no_cycle(monkeypatch):
+    class CycleClaimReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【循环依赖阻塞】任务1与任务2存在循环依赖：任务1依赖任务2，任务2又依赖任务1，导致无法确定实施顺序",
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: CycleClaimReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "固定资产系统", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "任务1", "description": "基础建模", "priority": "P0", "depends_on": []},
+            {"title": "任务2", "description": "后端框架", "priority": "P0", "depends_on": ["任务1"]},
+        ],
+        "prompt_pack": [{"task_title": "任务2", "coding_prompt": "a", "test_prompt": "b"}],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])
+
+
+def test_reviewer_postprocess_keeps_cycle_issue_when_graph_has_cycle(monkeypatch):
+    class CycleClaimReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【循环依赖阻塞】任务A与任务B存在循环依赖，需要先重构依赖关系。",
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: CycleClaimReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "固定资产系统", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "任务A", "description": "A", "priority": "P0", "depends_on": ["任务B"]},
+            {"title": "任务B", "description": "B", "priority": "P0", "depends_on": ["任务A"]},
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "planner"
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+
+
+def test_reviewer_postprocess_downgrades_research_timing_dispute(monkeypatch):
+    class TimingDisputeReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "二维码扫描兼容性验证时机错误：'验证移动端二维码扫描兼容性'被标记为P0优先级且deps=0，但实际依赖'实现二维码生成与绑定功能'才能验证。"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: TimingDisputeReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "固定资产系统", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "验证移动端二维码扫描兼容性",
+                "description": "【技术预研】验证iOS/Android主流浏览器扫码权限与兼容性，输出选型建议。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "实现二维码生成与绑定功能",
+                "description": "实现二维码生成、绑定与解析。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["next_step"] == "finish"
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])

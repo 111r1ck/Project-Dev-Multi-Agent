@@ -508,3 +508,73 @@ def analyze_blocking_issue_coverage(
         "downgraded": downgraded,
         "diagnostics": diagnostics,
     }
+
+
+def detect_dependency_cycles(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    graph: dict[str, set[str]] = {}
+    duplicate_titles: list[str] = []
+    unknown_dependencies: set[str] = set()
+
+    for task in tasks or []:
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        if title in graph and title not in duplicate_titles:
+            duplicate_titles.append(title)
+        graph.setdefault(title, set())
+
+    for task in tasks or []:
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        for dep in (task.get("depends_on", []) or []):
+            dep_title = str(dep).strip()
+            if not dep_title:
+                continue
+            if dep_title not in graph:
+                unknown_dependencies.add(dep_title)
+                continue
+            graph[title].add(dep_title)
+
+    visited: dict[str, int] = {node: 0 for node in graph}
+    stack: list[str] = []
+    stack_index: dict[str, int] = {}
+    cycles: list[list[str]] = []
+    cycle_keys: set[tuple[str, ...]] = set()
+
+    def _canonical_cycle(path: list[str]) -> tuple[str, ...]:
+        ring = path[:-1] if len(path) > 1 and path[0] == path[-1] else list(path)
+        if not ring:
+            return tuple()
+        rotations = [tuple(ring[i:] + ring[:i]) for i in range(len(ring))]
+        return min(rotations)
+
+    def _dfs(node: str) -> None:
+        visited[node] = 1
+        stack_index[node] = len(stack)
+        stack.append(node)
+        for dep in graph.get(node, set()):
+            state = visited.get(dep, 0)
+            if state == 0:
+                _dfs(dep)
+            elif state == 1:
+                start = stack_index.get(dep, 0)
+                cycle_path = stack[start:] + [dep]
+                key = _canonical_cycle(cycle_path)
+                if key and key not in cycle_keys:
+                    cycle_keys.add(key)
+                    cycles.append(cycle_path)
+        stack.pop()
+        stack_index.pop(node, None)
+        visited[node] = 2
+
+    for node in graph:
+        if visited[node] == 0:
+            _dfs(node)
+
+    return {
+        "has_cycle": bool(cycles),
+        "cycles": cycles,
+        "unknown_dependencies": sorted(unknown_dependencies),
+        "duplicate_titles": duplicate_titles,
+    }

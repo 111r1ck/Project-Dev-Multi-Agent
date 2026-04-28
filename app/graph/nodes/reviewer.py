@@ -1,9 +1,11 @@
 import re
+from difflib import SequenceMatcher
 
 from app.agents.reviewer_agent import build_reviewer_agent
 from app.config import settings
 from app.graph.nodes.common import (
     analyze_blocking_issue_coverage,
+    detect_dependency_cycles,
     extract_blocking_issues,
     extract_structured_response,
     summarize_key_list,
@@ -212,6 +214,28 @@ def _is_hard_blocking_issue_text(issue: str) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _is_dependency_cycle_issue_text(issue: str) -> bool:
+    text = str(issue or "").lower()
+    markers = ("循环依赖", "依赖环", "环形依赖", "互相依赖", "circular dependency")
+    return any(marker in text for marker in markers)
+
+
+def _is_dependency_timing_issue_text(issue: str) -> bool:
+    text = str(issue or "").lower()
+    markers = (
+        "时机错误",
+        "依赖项错误",
+        "应依赖",
+        "应该依赖",
+        "需依赖",
+        "需要依赖",
+        "deps=0",
+        "前置",
+        "后置",
+    )
+    return any(marker in text for marker in markers)
+
+
 _POSTPROCESS_STOP_WORDS: set[str] = {
     "需求",
     "明确",
@@ -240,6 +264,168 @@ def _cjk_bigrams(text: str) -> set[str]:
     if len(chars) < 2:
         return set()
     return {"".join(chars[i : i + 2]) for i in range(len(chars) - 1)}
+
+
+def _normalize_phrase(text: str) -> str:
+    normalized = re.sub(r"^【[^】]+】", "", str(text or "")).strip()
+    normalized = normalized.strip("'\"‘’“”`")
+    normalized = re.sub(r"[（(].*?[)）]$", "", normalized).strip()
+    normalized = re.sub(r"(相关任务|开发任务|任务|模块|功能)$", "", normalized).strip()
+    return normalized
+
+
+def _extract_missing_claim_phrases(issue: str) -> list[str]:
+    text = str(issue or "")
+    patterns = [
+        r"要求['‘“\"]([^'’”\"]{2,80})['’”\"]",
+        r"未发现([^，。；\n]{2,80})",
+        r"未见([^，。；\n]{2,80})",
+        r"缺少([^，。；\n]{2,80})",
+        r"缺失([^，。；\n]{2,80})",
+        r"未包含([^，。；\n]{2,80})",
+    ]
+    phrases: list[str] = []
+    for pattern in patterns:
+        for value in re.findall(pattern, text):
+            phrase = _normalize_phrase(value)
+            if len(phrase) < 2:
+                continue
+            if phrase not in phrases:
+                phrases.append(phrase)
+    return phrases[:6]
+
+
+def _build_evidence_items(tasks: list[dict], prompts: list[dict]) -> list[str]:
+    items: list[str] = []
+    for task in tasks or []:
+        title = str(task.get("title", "")).strip()
+        description = str(task.get("description", "")).strip()
+        merged = " ".join([title, description]).strip()
+        if merged:
+            items.append(merged)
+    for prompt in prompts or []:
+        merged = " ".join(
+            [
+                str(prompt.get("task_title", "")).strip(),
+                str(prompt.get("coding_prompt", "")).strip(),
+                str(prompt.get("test_prompt", "")).strip(),
+            ]
+        ).strip()
+        if merged:
+            items.append(merged)
+    return items
+
+
+def _phrase_supported_by_items(phrase: str, items: list[str]) -> bool:
+    phrase_norm = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", _normalize_phrase(phrase))
+    if len(phrase_norm) < 2:
+        return False
+    phrase_tokens = _pp_tokens(phrase)
+    phrase_bigrams = _cjk_bigrams(phrase)
+
+    for item in items:
+        item_norm = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(item or ""))
+        if not item_norm:
+            continue
+        if phrase_norm in item_norm:
+            return True
+
+        item_tokens = _pp_tokens(item)
+        if phrase_tokens:
+            token_hit = len(phrase_tokens & item_tokens)
+            required_token_hit = min(2, len(phrase_tokens))
+            if token_hit >= required_token_hit:
+                return True
+
+        item_bigrams = _cjk_bigrams(item)
+        if phrase_bigrams and item_bigrams:
+            overlap = len(phrase_bigrams & item_bigrams)
+            if overlap >= max(2, int(len(phrase_bigrams) * 0.45)):
+                return True
+
+        if len(phrase_norm) >= 4 and SequenceMatcher(None, phrase_norm, item_norm).ratio() >= 0.62:
+            return True
+    return False
+
+
+def _issue_claims_missing_but_present(
+    issue: str,
+    tasks: list[dict],
+    prompts: list[dict],
+    diag: dict | None = None,
+) -> bool:
+    missing_markers = ("未发现", "未见", "缺少", "缺失", "未包含", "未覆盖")
+    issue_text = str(issue or "")
+    if not any(marker in issue_text for marker in missing_markers):
+        return False
+
+    phrases = _extract_missing_claim_phrases(issue_text)
+    missing_capability = str((diag or {}).get("missing_capability", "")).strip()
+    if missing_capability:
+        normalized_capability = _normalize_phrase(missing_capability)
+        if normalized_capability and normalized_capability not in phrases:
+            phrases.append(normalized_capability)
+    if not phrases:
+        return False
+
+    evidence_items = _build_evidence_items(tasks, prompts)
+    if not evidence_items:
+        return False
+    return any(_phrase_supported_by_items(phrase, evidence_items) for phrase in phrases)
+
+
+def _extract_quoted_phrases(text: str) -> list[str]:
+    raw = re.findall(r"['‘“\"]([^'’”\"]{2,120})['’”\"]", str(text or ""))
+    phrases: list[str] = []
+    for item in raw:
+        phrase = str(item).strip()
+        if phrase and phrase not in phrases:
+            phrases.append(phrase)
+    return phrases
+
+
+def _is_research_like_task(task: dict) -> bool:
+    text = " ".join(
+        [
+            str(task.get("title", "")).strip(),
+            str(task.get("description", "")).strip(),
+        ]
+    )
+    markers = (
+        "技术预研",
+        "可行性验证",
+        "兼容性验证",
+        "兼容性测试",
+        "poc",
+        "方案选型",
+        "验证",
+    )
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in markers)
+
+
+def _issue_is_research_timing_dispute(
+    issue: str,
+    tasks: list[dict],
+) -> bool:
+    if not _is_dependency_timing_issue_text(issue):
+        return False
+    quoted = _extract_quoted_phrases(issue)
+    if not quoted:
+        return False
+    by_title = {
+        str(task.get("title", "")).strip(): task
+        for task in (tasks or [])
+        if str(task.get("title", "")).strip()
+    }
+    for phrase in quoted:
+        task = by_title.get(phrase)
+        if not task:
+            continue
+        deps = [str(dep).strip() for dep in (task.get("depends_on", []) or []) if str(dep).strip()]
+        if not deps and _is_research_like_task(task):
+            return True
+    return False
 
 
 def _issue_suggestion_has_contradiction_evidence(
@@ -332,6 +518,8 @@ def _postprocess_review_report_with_evidence(
     uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
     uncovered_set = set(uncovered)
     diagnostics = coverage_analysis.get("diagnostics", []) or []
+    dependency_check = detect_dependency_cycles(tasks)
+    post_diagnostics: list[dict] = []
     diag_by_issue = {
         str(item.get("issue_text", "")): item for item in diagnostics if isinstance(item, dict)
     }
@@ -339,6 +527,51 @@ def _postprocess_review_report_with_evidence(
     kept_issues: list[str] = []
     downgraded_issues: list[str] = []
     for issue in issues:
+        if _issue_is_research_timing_dispute(issue, tasks):
+            downgraded_issues.append(issue)
+            post_diagnostics.append(
+                {
+                    "issue_text": issue,
+                    "issue_type": "dependency_timing",
+                    "decision": "downgraded_research_timing_dispute",
+                    "reason": "research_task_can_be_preflight_with_empty_depends_on",
+                }
+            )
+            continue
+
+        if _is_dependency_cycle_issue_text(issue):
+            if dependency_check.get("has_cycle"):
+                kept_issues.append(issue)
+                post_diagnostics.append(
+                    {
+                        "issue_text": issue,
+                        "issue_type": "dependency_cycle",
+                        "decision": "blocking_cycle_confirmed",
+                        "has_cycle": True,
+                        "cycles": dependency_check.get("cycles", [])[:3],
+                    }
+                )
+            else:
+                downgraded_issues.append(issue)
+                post_diagnostics.append(
+                    {
+                        "issue_text": issue,
+                        "issue_type": "dependency_cycle",
+                        "decision": "downgraded_no_cycle",
+                        "has_cycle": False,
+                    }
+                )
+            continue
+
+        if _issue_claims_missing_but_present(
+            issue,
+            tasks,
+            prompts,
+            diag_by_issue.get(issue, {}),
+        ):
+            downgraded_issues.append(issue)
+            continue
+
         if issue in uncovered_set:
             if _issue_suggestion_has_contradiction_evidence(
                 issue,
@@ -393,7 +626,7 @@ def _postprocess_review_report_with_evidence(
 
     normalized["issues"] = kept_issues
     normalized["suggestions"] = suggestions
-    normalized["diagnostics"] = diagnostics
+    normalized["diagnostics"] = diagnostics + post_diagnostics
 
     if kept_issues:
         normalized["passed"] = False
@@ -573,6 +806,40 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         )
         uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
         downgraded = [str(item) for item in (coverage_analysis.get("downgraded", []) or [])]
+        timing_uncovered = [item for item in uncovered if _issue_is_research_timing_dispute(item, tasks)]
+        if timing_uncovered:
+            uncovered = [item for item in uncovered if item not in timing_uncovered]
+            downgraded.extend(timing_uncovered)
+            timing_diag = [
+                {
+                    "issue_text": item,
+                    "issue_type": "dependency_timing",
+                    "decision": "downgraded_research_timing_dispute",
+                    "reason": "research_task_can_be_preflight_with_empty_depends_on",
+                }
+                for item in timing_uncovered
+            ]
+            coverage_analysis["diagnostics"] = (
+                coverage_analysis.get("diagnostics", []) or []
+            ) + timing_diag
+        dependency_check = detect_dependency_cycles(tasks)
+        if not dependency_check.get("has_cycle"):
+            cycle_uncovered = [item for item in uncovered if _is_dependency_cycle_issue_text(item)]
+            if cycle_uncovered:
+                uncovered = [item for item in uncovered if item not in cycle_uncovered]
+                downgraded.extend(cycle_uncovered)
+                extra_diag = [
+                    {
+                        "issue_text": item,
+                        "issue_type": "dependency_cycle",
+                        "decision": "downgraded_no_cycle",
+                        "has_cycle": False,
+                    }
+                    for item in cycle_uncovered
+                ]
+                coverage_analysis["diagnostics"] = (
+                    coverage_analysis.get("diagnostics", []) or []
+                ) + extra_diag
         if uncovered:
             suggestions = [
                 "请先补齐上述阻塞项对应任务，再进入评审。",
@@ -620,6 +887,9 @@ def reviewer_node(state: ProjectState) -> ProjectState:
 
     compact_context = (
         "请对当前方案进行评审，重点检查遗漏、冲突、不可实施风险与范围过大问题。\n"
+        "严格规则：请仅基于提供的task_breakdown.depends_on判断依赖与循环，不要臆造依赖边。\n"
+        "若你认为某任务应调整依赖或执行时机，请写入suggestions，不要作为阻塞issues。\n"
+        "对技术预研/兼容性验证/POC类任务，允许前置执行（depends_on为空并不自动构成阻塞）。\n"
         f"需求摘要: {req.get('summary', '')}\n"
         f"关键约束: {summarize_key_list(req.get('constraints', []), max_items=10, max_chars=1200)}\n"
         f"可行性: feasible={fea.get('feasible')} complexity={fea.get('complexity')}\n"

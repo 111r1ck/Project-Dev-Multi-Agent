@@ -1,6 +1,7 @@
 from app.services.missing_info_resolver import (
     build_assumption_pack,
     classify_missing_info_levels,
+    evaluate_missing_info_signal,
 )
 
 
@@ -87,3 +88,42 @@ def test_classify_missing_info_levels():
     assert levels["must_confirm"] == ["核心身份认证方式尚未确定"]
     assert levels["assumable"] == ["外部服务接口服务等级未明确"]
     assert levels["deferred"] == ["后续增强报表口径未确认"]
+
+
+def test_evaluate_missing_info_signal_uses_dynamic_threshold_by_complexity():
+    signal_low = evaluate_missing_info_signal(
+        missing_info=["部署环境未明确", "日志保留周期未明确", "备份窗口未明确"],
+        complexity="low",
+    )
+    signal_medium = evaluate_missing_info_signal(
+        missing_info=["部署环境未明确", "日志保留周期未明确", "备份窗口未明确", "通知通道优先级未明确"],
+        complexity="M",
+    )
+    signal_high = evaluate_missing_info_signal(
+        missing_info=["并发策略未明确", "核心接口容量目标未确认"],
+        complexity="high",
+    )
+
+    assert signal_low["dynamic_threshold"] == 6.0
+    assert signal_medium["dynamic_threshold"] == 4.0
+    assert signal_high["dynamic_threshold"] == 2.0
+    assert signal_low["missing_score"] < signal_low["dynamic_threshold"]
+    assert signal_medium["missing_score"] >= signal_medium["dynamic_threshold"]
+    assert signal_high["missing_score"] >= signal_high["dynamic_threshold"]
+
+
+def test_evaluate_missing_info_signal_scores_meta_capability_clusters():
+    signal = evaluate_missing_info_signal(
+        missing_info=[
+            "审批状态机时效规则未明确",
+            "外部依赖对接SLA与回调策略未确认",
+            "日志留痕保留周期与审计口径未确认",
+        ],
+        complexity="m",
+    )
+
+    assert signal["risk_cluster_hits"]["workflow_policy"] >= 1
+    assert signal["risk_cluster_hits"]["integration_dependency"] >= 1
+    assert signal["risk_cluster_hits"]["observability_auditability"] >= 1
+    assert signal["risk_bonus_per_cluster"] == 0.5
+    assert signal["risk_bonus_hits"]

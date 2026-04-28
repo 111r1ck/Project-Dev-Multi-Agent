@@ -1,4 +1,4 @@
-from app.graph.nodes.common import analyze_blocking_issue_coverage
+from app.graph.nodes.common import analyze_blocking_issue_coverage, detect_dependency_cycles
 
 
 def test_coverage_engine_marks_issue_as_covered_with_multi_source_evidence():
@@ -73,3 +73,23 @@ def test_coverage_engine_downgrades_low_confidence_issue():
     assert result["uncovered"] == []
     assert result["downgraded"] == issues
     assert result["diagnostics"][0]["decision"] == "downgraded_uncovered"
+
+
+def test_detect_dependency_cycles_finds_cycle():
+    tasks = [
+        {"title": "任务A", "description": "", "depends_on": ["任务B"]},
+        {"title": "任务B", "description": "", "depends_on": ["任务A"]},
+    ]
+    result = detect_dependency_cycles(tasks)
+    assert result["has_cycle"] is True
+    assert result["cycles"]
+
+
+def test_detect_dependency_cycles_handles_acyclic_graph():
+    tasks = [
+        {"title": "任务1", "description": "", "depends_on": []},
+        {"title": "任务2", "description": "", "depends_on": ["任务1"]},
+    ]
+    result = detect_dependency_cycles(tasks)
+    assert result["has_cycle"] is False
+    assert result["cycles"] == []

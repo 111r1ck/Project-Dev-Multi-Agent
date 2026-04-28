@@ -5,6 +5,7 @@ from app.graph.state import ProjectState
 from app.services.missing_info_resolver import (
     build_assumption_pack,
     classify_missing_info_levels,
+    evaluate_missing_info_signal,
 )
 
 
@@ -20,13 +21,15 @@ def feasibility_analyst_node(state: ProjectState) -> ProjectState:
     structured = extract_structured_response(result)
     levels = classify_missing_info_levels(structured.missing_info)
     must_confirm_count = len(levels.get("must_confirm", []))
-    complexity = str(getattr(structured, "complexity", "") or "").strip().lower()
-    simple_complexity_markers = {"low", "simple", "s", "小", "低"}
-    is_simple_case = complexity in simple_complexity_markers
+    signal = evaluate_missing_info_signal(
+        missing_info=structured.missing_info,
+        complexity=getattr(structured, "complexity", ""),
+        levels=levels,
+    )
     need_human_raw = (
         (not structured.feasible)
         or must_confirm_count > 0
-        or (len(structured.missing_info) >= 6 and not is_simple_case)
+        or (signal["missing_score"] >= signal["dynamic_threshold"])
     )
     human_rounds = state.get("human_rounds")
     if human_rounds is None:
@@ -47,9 +50,18 @@ def feasibility_analyst_node(state: ProjectState) -> ProjectState:
     else:
         assumption_pack = state.get("assumption_pack", {})
 
+    feasibility_report = structured.model_dump()
+    feasibility_report["diagnostics"] = {
+        "human_gate": {
+            "need_human_raw": need_human_raw,
+            "need_human": need_human,
+            "missing_info_signal": signal,
+        }
+    }
+
     return {
         **state,
-        "feasibility_report": structured.model_dump(),
+        "feasibility_report": feasibility_report,
         "assumption_pack": assumption_pack,
         "need_human": need_human,
         "errors": errors,
