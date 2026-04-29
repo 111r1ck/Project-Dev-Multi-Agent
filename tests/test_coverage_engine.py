@@ -155,3 +155,34 @@ def test_coverage_engine_compound_security_terms_mark_as_covered():
     )
     assert result["uncovered"] == []
     assert result["diagnostics"][0]["decision"] == "covered"
+
+
+def test_coverage_engine_english_missing_claim_marks_as_covered():
+    tasks = [
+        {
+            "title": "Implement security compliance validation tasks",
+            "description": "Add security audit checks, data masking, and access log validation.",
+            "depends_on": [],
+        }
+    ]
+    prompts = [
+        {
+            "task_title": "Implement security compliance validation tasks",
+            "coding_prompt": "Implement audit log and data masking controls.",
+            "test_prompt": "Cover security audit and compliance validation scenarios.",
+        }
+    ]
+    issues = [
+        "Missing security compliance validation task: requirement explicitly requires data to meet security policies, but no security audit, data masking, or access log validation tasks were found"
+    ]
+
+    result = analyze_blocking_issue_coverage(
+        tasks,
+        issues,
+        prompt_pack=prompts,
+        min_evidence_hits=2,
+        min_confidence=0.65,
+        blocking_confidence=0.75,
+    )
+    assert result["uncovered"] == []
+    assert result["diagnostics"][0]["decision"] == "covered"

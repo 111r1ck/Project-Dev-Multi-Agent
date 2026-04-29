@@ -1072,7 +1072,13 @@
           Array.isArray(data.result.review_report.diagnostics)
         )
           ? data.result.review_report.diagnostics
-          : [];
+          : (
+            data.state &&
+            data.state.review_report &&
+            Array.isArray(data.state.review_report.diagnostics)
+          )
+            ? data.state.review_report.diagnostics
+            : [];
         if (reviewDiagnostics.length > 0) {
           sectionDefs.push({
             key: "__review_diagnostics__",

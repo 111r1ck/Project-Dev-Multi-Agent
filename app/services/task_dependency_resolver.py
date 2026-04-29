@@ -228,3 +228,83 @@ def break_dependency_cycles(tasks: list[dict]) -> tuple[list[dict], dict]:
         "removed_edges": removed_edges,
     }
     return fixed, diagnostics
+
+
+def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict], dict]:
+    """
+    Fix common direction anti-patterns in dependencies.
+    Generic rule:
+    - Foundation tasks (schema/infra/bootstrap/model) must not depend on
+      integration/testing/validation/UAT tasks.
+    """
+    fixed = [dict(task) for task in tasks]
+    by_title = {
+        str(task.get("title", "")).strip(): task
+        for task in fixed
+        if str(task.get("title", "")).strip()
+    }
+    rewired: list[dict[str, str]] = []
+
+    def _task_text(task: dict) -> str:
+        return f"{task.get('title', '')} {task.get('description', '')}"
+
+    def _is_foundation(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "schema",
+                "表结构",
+                "数据库",
+                "ddl",
+                "数据模型",
+                "初始化",
+                "基础设施",
+                "脚手架",
+                "infra",
+                "bootstrap",
+                "data model",
+                "database",
+            ),
+        )
+
+    def _is_validation_or_integration(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "联调",
+                "集成",
+                "测试",
+                "压测",
+                "验收",
+                "验证",
+                "回归",
+                "integration",
+                "e2e",
+                "uat",
+                "test",
+                "testing",
+                "validation",
+                "benchmark",
+            ),
+        )
+
+    for task in fixed:
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        if not _is_foundation(task):
+            continue
+        deps = [str(dep).strip() for dep in (task.get("depends_on", []) or []) if str(dep).strip()]
+        new_deps: list[str] = []
+        for dep in deps:
+            dep_task = by_title.get(dep)
+            if dep_task and _is_validation_or_integration(dep_task):
+                rewired.append({"from": title, "removed_dep": dep, "reason": "foundation_depends_on_validation"})
+                continue
+            if dep not in new_deps:
+                new_deps.append(dep)
+        task["depends_on"] = new_deps
+
+    return fixed, {"direction_fixes": rewired}

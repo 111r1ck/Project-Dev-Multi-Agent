@@ -173,6 +173,16 @@ def _has_blocking_issue(review_report: dict) -> bool:
         "must",
         "blocker",
         "critical",
+        "missing",
+        "cannot",
+        "failed",
+        "risk",
+        "compliance",
+        "audit",
+        "performance",
+        "uncovered",
+        "dependency",
+        "conflict",
     ]
     normalized_issues = [issue.lower() for issue in issues]
     return any(
@@ -210,13 +220,30 @@ def _is_hard_blocking_issue_text(issue: str) -> bool:
         "blocker",
         "critical",
         "must",
+        "missing",
+        "cannot",
+        "failed",
+        "risk",
+        "compliance",
+        "audit",
+        "performance",
+        "data loss",
+        "architecture conflict",
     )
     return any(marker in text for marker in markers)
 
 
 def _is_dependency_cycle_issue_text(issue: str) -> bool:
     text = str(issue or "").lower()
-    markers = ("循环依赖", "依赖环", "环形依赖", "互相依赖", "circular dependency")
+    markers = (
+        "循环依赖",
+        "依赖环",
+        "环形依赖",
+        "互相依赖",
+        "circular dependency",
+        "dependency cycle",
+        "cycle detected",
+    )
     return any(marker in text for marker in markers)
 
 
@@ -238,8 +265,72 @@ def _is_dependency_timing_issue_text(issue: str) -> bool:
         "deps=0",
         "前置",
         "后置",
+        "timing",
+        "blocked by",
+        "should depend on",
+        "dependency chain",
+        "depends_on",
+        "preflight",
+        "prerequisite",
     )
     return any(marker in text for marker in markers)
+
+
+def _has_foundation_reverse_dependency(tasks: list[dict]) -> bool:
+    def _task_text(task: dict) -> str:
+        return f"{task.get('title', '')} {task.get('description', '')}".lower()
+
+    def _is_foundation(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "schema",
+            "数据库",
+            "表结构",
+            "ddl",
+            "数据模型",
+            "初始化",
+            "基础设施",
+            "脚手架",
+            "infra",
+            "bootstrap",
+            "data model",
+            "database",
+        )
+        return any(marker.lower() in text for marker in markers)
+
+    def _is_validation_or_integration(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "联调",
+            "集成",
+            "测试",
+            "压测",
+            "验收",
+            "验证",
+            "回归",
+            "integration",
+            "e2e",
+            "uat",
+            "test",
+            "testing",
+            "validation",
+            "benchmark",
+        )
+        return any(marker.lower() in text for marker in markers)
+
+    by_title = {
+        str(item.get("title", "")).strip(): item
+        for item in (tasks or [])
+        if str(item.get("title", "")).strip()
+    }
+    for task in (tasks or []):
+        if not _is_foundation(task):
+            continue
+        for dep in (task.get("depends_on", []) or []):
+            dep_task = by_title.get(str(dep).strip())
+            if dep_task and _is_validation_or_integration(dep_task):
+                return True
+    return False
 
 
 def _render_cycle_issue(cycle: list[str]) -> str:
@@ -764,7 +855,7 @@ def _postprocess_review_report_with_evidence(
                 )
             continue
 
-        if _is_dependency_timing_issue_text(issue):
+        if _is_dependency_timing_issue_text(issue) and not _has_foundation_reverse_dependency(tasks):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
             _set_issue_outcome(
@@ -778,6 +869,15 @@ def _postprocess_review_report_with_evidence(
                 "dependency_timing",
                 "downgraded_dependency_timing",
                 "dependency_timing_dispute_should_not_block_without_structural_cycle",
+            )
+            continue
+        if _is_dependency_timing_issue_text(issue) and _has_foundation_reverse_dependency(tasks):
+            kept_issues.append(issue)
+            _set_issue_outcome(
+                issue,
+                "kept_blocking",
+                "foundation_reverse_dependency_detected",
+                "foundation_tasks_must_not_depend_on_validation_or_integration_tasks",
             )
             continue
 

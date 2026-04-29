@@ -18,6 +18,7 @@ from app.services.planning_guardrails import (
 )
 from app.services.task_dependency_resolver import resolve_task_dependencies
 from app.services.task_dependency_resolver import break_dependency_cycles
+from app.services.task_dependency_resolver import fix_dependency_direction_anti_patterns
 
 
 def _normalize_text(text: str) -> str:
@@ -358,6 +359,7 @@ def planner_node(state: ProjectState) -> ProjectState:
     )
     tasks = _apply_review_task_updates(tasks, review_report)
     tasks = resolve_task_dependencies(tasks)
+    tasks, direction_fix_diagnostics = fix_dependency_direction_anti_patterns(tasks)
     tasks, dependency_diagnostics = break_dependency_cycles(tasks)
     tasks = align_dependency_priorities(tasks)
     budget = _task_budget_from_complexity(fea.get("complexity", ""))
@@ -372,6 +374,9 @@ def planner_node(state: ProjectState) -> ProjectState:
     return {
         **state,
         "task_breakdown": tasks,
-        "task_dependency_diagnostics": dependency_diagnostics,
+        "task_dependency_diagnostics": {
+            **(dependency_diagnostics or {}),
+            **(direction_fix_diagnostics or {}),
+        },
         "next_step": "prompt_builder",
     }

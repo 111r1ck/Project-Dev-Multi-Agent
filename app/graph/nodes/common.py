@@ -85,7 +85,23 @@ def extract_blocking_issues(review_report: dict[str, Any], max_items: int = 8) -
     if not issues:
         return []
 
-    blocking_markers = ["关键", "缺失", "阻塞", "无法", "失败", "风险", "未覆盖", "must"]
+    blocking_markers = [
+        "关键",
+        "缺失",
+        "阻塞",
+        "无法",
+        "失败",
+        "风险",
+        "未覆盖",
+        "must",
+        "blocker",
+        "critical",
+        "missing",
+        "cannot",
+        "failed",
+        "risk",
+        "uncovered",
+    ]
     selected = [i for i in issues if any(m in i for m in blocking_markers)]
     if not selected:
         selected = issues
@@ -110,6 +126,13 @@ def _extract_issue_focus_phrase(issue: str) -> str | None:
         r"未见([^，。；\n]{2,80})开发任务",
         r"未明确包含([^，。；\n]{2,80})逻辑",
         r"([^，。；\n]{2,80})未确定",
+        r"missing\s+([^,.;\n]{2,120})",
+        r"not\s+found\s+([^,.;\n]{2,120})",
+        r"lack(?:s|ing)?\s+([^,.;\n]{2,120})",
+        r"failed to include\s+([^,.;\n]{2,120})",
+        r"require(?:ment)?\s+(?:explicitly\s+)?requires?\s+['\"“”]([^'\"“”]{2,120})['\"“”]",
+        r"no\s+([^,.;\n]{2,120})\s+task",
+        r"without\s+([^,.;\n]{2,120})",
     ]
     text = _normalize_text(issue)
     for pattern in patterns:
@@ -200,6 +223,26 @@ _ACTION_MARKERS: tuple[str, ...] = (
     "释放",
     "同步",
     "查询",
+    "build",
+    "implement",
+    "design",
+    "add",
+    "remove",
+    "update",
+    "view",
+    "cancel",
+    "submit",
+    "approve",
+    "import",
+    "export",
+    "process",
+    "validate",
+    "integrate",
+    "configure",
+    "notify",
+    "release",
+    "sync",
+    "query",
 )
 
 _CLUSTER_STOP_WORDS: set[str] = {
@@ -228,6 +271,13 @@ _NOISE_TERMS: set[str] = {
     "默认",
     "超期",
     "自动",
+    "requirement explicitly requires",
+    "not found in task list",
+    "missing from task list",
+    "key requirement missing",
+    "feature missing",
+    "default",
+    "automatic",
 }
 
 _TERM_NORMALIZATION_PAIRS: tuple[tuple[str, str], ...] = (
@@ -262,12 +312,89 @@ _TERM_NORMALIZATION_PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 _META_CAPABILITY_CLUSTERS: dict[str, tuple[str, ...]] = {
-    "delivery": ("前端", "后端", "联调", "页面", "接口", "交付", "端到端"),
-    "data_integrity": ("幂等", "一致性", "状态机", "事务", "锁", "回滚", "补偿"),
-    "performance": ("性能", "延迟", "容量", "压测", "吞吐", "负载", "超时"),
-    "security": ("权限", "鉴权", "认证", "隔离", "审计", "合规", "越权"),
-    "observability": ("监控", "日志", "告警", "指标", "追踪", "链路"),
-    "release_safety": ("灰度", "发布", "回滚", "变更", "演练"),
+    "delivery": (
+        "前端",
+        "后端",
+        "联调",
+        "页面",
+        "接口",
+        "交付",
+        "端到端",
+        "frontend",
+        "backend",
+        "integration",
+        "page",
+        "api",
+        "delivery",
+        "e2e",
+    ),
+    "data_integrity": (
+        "幂等",
+        "一致性",
+        "状态机",
+        "事务",
+        "锁",
+        "回滚",
+        "补偿",
+        "idempotent",
+        "consistency",
+        "state machine",
+        "transaction",
+        "rollback",
+        "compensation",
+        "lock",
+    ),
+    "performance": (
+        "性能",
+        "延迟",
+        "容量",
+        "压测",
+        "吞吐",
+        "负载",
+        "超时",
+        "performance",
+        "latency",
+        "capacity",
+        "stress",
+        "throughput",
+        "load",
+        "timeout",
+        "qps",
+        "p95",
+        "p99",
+    ),
+    "security": (
+        "权限",
+        "鉴权",
+        "认证",
+        "隔离",
+        "审计",
+        "合规",
+        "越权",
+        "security",
+        "auth",
+        "authentication",
+        "authorization",
+        "isolation",
+        "audit",
+        "compliance",
+        "access control",
+    ),
+    "observability": (
+        "监控",
+        "日志",
+        "告警",
+        "指标",
+        "追踪",
+        "链路",
+        "monitoring",
+        "log",
+        "alert",
+        "metrics",
+        "tracing",
+        "trace",
+    ),
+    "release_safety": ("灰度", "发布", "回滚", "变更", "演练", "release", "rollback", "change", "drill"),
 }
 
 _DYNAMIC_CLUSTER_WEIGHT = 0.12
@@ -311,6 +438,19 @@ def _sequence_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return SequenceMatcher(None, a, b).ratio()
+
+
+def _detect_language_profile(text: str) -> str:
+    s = str(text or "")
+    zh_count = len(re.findall(r"[\u4e00-\u9fff]", s))
+    en_count = len(re.findall(r"[A-Za-z]", s))
+    if zh_count > 0 and en_count > 0:
+        return "mixed"
+    if zh_count > 0:
+        return "zh"
+    if en_count > 0:
+        return "en"
+    return "other"
 
 
 def _extract_action_object_pairs(text: str) -> set[tuple[str, str]]:
@@ -665,6 +805,7 @@ def analyze_blocking_issue_coverage(
         diagnostics.append(
             {
                 "issue_text": issue_text,
+                "language_profile": _detect_language_profile(issue_text),
                 "missing_capability": capability,
                 "issue_terms": issue_terms[:6],
                 "evidence_checked": list(sources.keys()),

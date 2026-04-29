@@ -1471,3 +1471,61 @@ def test_reviewer_downgrades_performance_data_sufficiency_issue(monkeypatch):
     ]
     assert matched
     assert any(str(item.get("final_disposition", "")) == "downgraded_to_suggestion" for item in matched)
+
+
+def test_reviewer_keeps_dependency_timing_blocking_when_foundation_reverse_dependency(monkeypatch):
+    class TimingIssueReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "dependency timing issue: 'design and initialize database schema' depends on 'frontend-backend integration test', which is reversed and blocks execution"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: TimingIssueReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "Frontend and backend integration test",
+                "description": "End-to-end integration validation.",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "Design and initialize database schema",
+                "description": "Define schema and create DDL.",
+                "priority": "P0",
+                "depends_on": ["Frontend and backend integration test"],
+            },
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "dependency timing issue" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
