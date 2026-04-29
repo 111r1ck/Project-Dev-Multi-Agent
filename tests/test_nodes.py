@@ -1213,7 +1213,19 @@ def test_reviewer_postprocess_downgrades_missing_claim_when_task_exists(monkeypa
     assert result["next_step"] == "finish"
     assert result["review_report"]["passed"] is True
     assert result["review_report"]["issues"] == []
-    assert len(result["review_report"]["suggestions"]) >= 2
+    assert len(result["review_report"]["suggestions"]) >= 1
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "部门维度报表导出" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(
+        str(item.get("final_disposition", "")) in {"downgraded_to_suggestion", "dropped_as_covered"}
+        for item in matched
+    )
 
 
 def test_reviewer_postprocess_downgrades_cycle_issue_when_graph_has_no_cycle(monkeypatch):
@@ -1395,6 +1407,16 @@ def test_reviewer_consistency_guard_restores_blocking_uncovered(monkeypatch):
     assert result["next_step"] == "planner"
     assert result["review_report"]["passed"] is False
     assert "【关键功能缺失】缺少核心对账校验任务。" in result["review_report"]["issues"]
+    diags = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diags
+        if isinstance(item, dict)
+        and item.get("issue_text") == "【关键功能缺失】缺少核心对账校验任务。"
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+    assert any("postprocess_reason_code" in item for item in matched)
 
 
 def test_reviewer_downgrades_performance_data_sufficiency_issue(monkeypatch):
@@ -1440,3 +1462,12 @@ def test_reviewer_downgrades_performance_data_sufficiency_issue(monkeypatch):
     assert result["review_report"]["passed"] is True
     assert result["review_report"]["issues"] == []
     assert any("已降级为建议" in item for item in result["review_report"]["suggestions"])
+    diags = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diags
+        if isinstance(item, dict)
+        and "性能基准测试缺少真实数据支撑" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "downgraded_to_suggestion" for item in matched)

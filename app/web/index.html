@@ -1083,20 +1083,41 @@
         completedSections.innerHTML = sectionDefs.map((section) => {
           let value = null;
           if (section.key === "__review_diagnostics__") {
-            const blocking = reviewDiagnostics.filter((item) => {
+            const keptBlocking = reviewDiagnostics.filter((item) => {
               if (!item || typeof item !== "object") return false;
-              const decision = String(item.decision || "");
-              return item.is_blocking === true || decision === "blocking_uncovered" || decision === "blocking_cycle_confirmed";
+              return String(item.final_disposition || "") === "kept_blocking";
             });
-            const handled = reviewDiagnostics.filter((item) => !blocking.includes(item));
+            const downgradedToSuggestion = reviewDiagnostics.filter((item) => {
+              if (!item || typeof item !== "object") return false;
+              return String(item.final_disposition || "") === "downgraded_to_suggestion";
+            });
+            const droppedAsCovered = reviewDiagnostics.filter((item) => {
+              if (!item || typeof item !== "object") return false;
+              return String(item.final_disposition || "") === "dropped_as_covered";
+            });
+            const droppedByPolicy = reviewDiagnostics.filter((item) => {
+              if (!item || typeof item !== "object") return false;
+              return String(item.final_disposition || "") === "dropped_by_policy";
+            });
+            const unknown = reviewDiagnostics.filter((item) => {
+              if (!item || typeof item !== "object") return false;
+              const d = String(item.final_disposition || "");
+              return !d || d === "unknown";
+            });
             value = {
               summary: {
                 total: reviewDiagnostics.length,
-                blocking_count: blocking.length,
-                handled_count: handled.length
+                kept_blocking_count: keptBlocking.length,
+                downgraded_to_suggestion_count: downgradedToSuggestion.length,
+                dropped_as_covered_count: droppedAsCovered.length,
+                dropped_by_policy_count: droppedByPolicy.length,
+                unknown_count: unknown.length
               },
-              blocking,
-              handled
+              kept_blocking: keptBlocking,
+              downgraded_to_suggestion: downgradedToSuggestion,
+              dropped_as_covered: droppedAsCovered,
+              dropped_by_policy: droppedByPolicy,
+              unknown
             };
           } else if (Object.prototype.hasOwnProperty.call(data.result, section.key)) {
             value = data.result[section.key];

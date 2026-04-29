@@ -648,8 +648,22 @@ def _postprocess_review_report_with_evidence(
     kept_issues: list[str] = []
     downgraded_issues: list[str] = []
     explicit_downgraded: set[str] = set()
+    issue_outcomes: dict[str, dict] = {}
+    consistency_errors: list[str] = []
     cycle_issue_seen = False
     rendered_cycle_issues: list[str] = []
+
+    def _set_issue_outcome(
+        issue_text: str,
+        final_disposition: str,
+        reason_code: str,
+        reason_text: str,
+    ) -> None:
+        issue_outcomes[str(issue_text)] = {
+            "final_disposition": final_disposition,
+            "postprocess_reason_code": reason_code,
+            "postprocess_reason_text": reason_text,
+        }
 
     def _append_downgrade_diag(issue_text: str, issue_type: str, decision: str, reason: str) -> None:
         post_diagnostics.append(
@@ -658,6 +672,10 @@ def _postprocess_review_report_with_evidence(
                 "issue_type": issue_type,
                 "decision": decision,
                 "reason": reason,
+                "postprocess_action": decision,
+                "final_disposition": "downgraded_to_suggestion",
+                "postprocess_reason_code": reason,
+                "postprocess_reason_text": reason,
             }
         )
 
@@ -665,6 +683,12 @@ def _postprocess_review_report_with_evidence(
         if _issue_is_research_timing_dispute(issue, tasks):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
+            _set_issue_outcome(
+                issue,
+                "downgraded_to_suggestion",
+                "research_timing_dispute",
+                "research_task_can_be_preflight_with_empty_depends_on",
+            )
             _append_downgrade_diag(
                 issue,
                 "dependency_timing",
@@ -681,6 +705,12 @@ def _postprocess_review_report_with_evidence(
                 if not alignment.get("aligned"):
                     downgraded_issues.append(issue)
                     explicit_downgraded.add(issue)
+                    _set_issue_outcome(
+                        issue,
+                        "downgraded_to_suggestion",
+                        "cycle_claim_not_aligned",
+                        "cycle_claim_mismatch_with_detected_cycles",
+                    )
                     _append_downgrade_diag(
                         issue,
                         "dependency_cycle",
@@ -698,6 +728,10 @@ def _postprocess_review_report_with_evidence(
                         "issue_text": issue,
                         "issue_type": "dependency_cycle",
                         "decision": "blocking_cycle_confirmed",
+                        "postprocess_action": "blocking_cycle_confirmed",
+                        "final_disposition": "kept_blocking",
+                        "postprocess_reason_code": "structural_cycle_confirmed",
+                        "postprocess_reason_text": "structural_cycle_confirmed",
                         "has_cycle": True,
                         "cycles": cycles[:3],
                         "claim_nodes": alignment.get("claim_nodes", []),
@@ -709,12 +743,22 @@ def _postprocess_review_report_with_evidence(
             else:
                 downgraded_issues.append(issue)
                 explicit_downgraded.add(issue)
+                _set_issue_outcome(
+                    issue,
+                    "downgraded_to_suggestion",
+                    "no_structural_cycle",
+                    "no_structural_cycle_detected",
+                )
                 post_diagnostics.append(
                     {
                         "issue_text": issue,
                         "issue_type": "dependency_cycle",
                         "decision": "downgraded_no_cycle",
                         "reason": "no_structural_cycle_detected",
+                        "postprocess_action": "downgraded_no_cycle",
+                        "final_disposition": "downgraded_to_suggestion",
+                        "postprocess_reason_code": "no_structural_cycle",
+                        "postprocess_reason_text": "no_structural_cycle_detected",
                         "has_cycle": False,
                     }
                 )
@@ -723,6 +767,12 @@ def _postprocess_review_report_with_evidence(
         if _is_dependency_timing_issue_text(issue):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
+            _set_issue_outcome(
+                issue,
+                "downgraded_to_suggestion",
+                "dependency_timing_dispute",
+                "dependency_timing_dispute_should_not_block_without_structural_cycle",
+            )
             _append_downgrade_diag(
                 issue,
                 "dependency_timing",
@@ -734,6 +784,12 @@ def _postprocess_review_report_with_evidence(
         if _is_performance_data_sufficiency_issue(issue) and _has_performance_validation_spec(tasks, prompts):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
+            _set_issue_outcome(
+                issue,
+                "downgraded_to_suggestion",
+                "performance_data_sufficient",
+                "performance_spec_contains_metric_threshold_and_data_scale",
+            )
             _append_downgrade_diag(
                 issue,
                 "performance_validation",
@@ -750,6 +806,12 @@ def _postprocess_review_report_with_evidence(
         ):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
+            _set_issue_outcome(
+                issue,
+                "downgraded_to_suggestion",
+                "missing_claim_present",
+                "missing_capability_claim_already_present_in_tasks_or_prompts",
+            )
             _append_downgrade_diag(
                 issue,
                 "missing_claim",
@@ -766,6 +828,12 @@ def _postprocess_review_report_with_evidence(
         ):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
+            _set_issue_outcome(
+                issue,
+                "downgraded_to_suggestion",
+                "issue_terms_supported",
+                "issue_terms_have_multi_hit_evidence_in_tasks_or_prompts",
+            )
             _append_downgrade_diag(
                 issue,
                 "missing_claim_terms",
@@ -784,6 +852,12 @@ def _postprocess_review_report_with_evidence(
             ):
                 downgraded_issues.append(issue)
                 explicit_downgraded.add(issue)
+                _set_issue_outcome(
+                    issue,
+                    "downgraded_to_suggestion",
+                    "contradiction_evidence",
+                    "suggestion_and_task_prompt_evidence_contradict_missing_claim",
+                )
                 _append_downgrade_diag(
                     issue,
                     "contradiction_evidence",
@@ -792,6 +866,12 @@ def _postprocess_review_report_with_evidence(
                 )
                 continue
             kept_issues.append(issue)
+            _set_issue_outcome(
+                issue,
+                "kept_blocking",
+                "blocking_uncovered_retained",
+                "blocking_issue_remains_uncovered",
+            )
             continue
         diag = diag_by_issue.get(issue, {})
         # Guardrail: hard blocking issues should not be downgraded if still uncovered.
@@ -826,8 +906,28 @@ def _postprocess_review_report_with_evidence(
             and (low_signal_uncovered or weak_single_source_uncovered)
         ):
             kept_issues.append(issue)
+            _set_issue_outcome(
+                issue,
+                "kept_blocking",
+                "hard_blocking_guard",
+                "hard_blocking_issue_not_downgraded_under_low_signal",
+            )
         else:
             downgraded_issues.append(issue)
+            if issue in covered_issue_set:
+                _set_issue_outcome(
+                    issue,
+                    "dropped_as_covered",
+                    "covered_by_cross_source_evidence",
+                    "covered_issue_not_promoted_to_suggestion",
+                )
+            else:
+                _set_issue_outcome(
+                    issue,
+                    "downgraded_to_suggestion",
+                    "generic_downgrade",
+                    "decision_based_downgrade",
+                )
             _append_downgrade_diag(
                 issue,
                 "generic",
@@ -839,6 +939,12 @@ def _postprocess_review_report_with_evidence(
         for item in rendered_cycle_issues:
             if item and item not in kept_issues:
                 kept_issues.append(item)
+                _set_issue_outcome(
+                    item,
+                    "kept_blocking",
+                    "structural_cycle_rendered",
+                    "rendered_from_detected_structural_cycle",
+                )
 
     downgraded_for_suggestions = [
         item for item in downgraded_issues if str(item).strip() and str(item).strip() not in covered_issue_set
@@ -868,7 +974,17 @@ def _postprocess_review_report_with_evidence(
                 "issue_type": "consistency_guard",
                 "decision": "forced_restore_blocking",
                 "reason": "blocking_uncovered_must_remain_in_issues",
+                "postprocess_action": "forced_restore_blocking",
+                "final_disposition": "kept_blocking",
+                "postprocess_reason_code": "blocking_uncovered_must_remain_in_issues",
+                "postprocess_reason_text": "blocking_uncovered_must_remain_in_issues",
             }
+        )
+        _set_issue_outcome(
+            issue,
+            "kept_blocking",
+            "blocking_uncovered_must_remain_in_issues",
+            "blocking_uncovered_must_remain_in_issues",
         )
 
     # Safety cleanup: downgraded suggestion prefix must never appear in issues.
@@ -876,13 +992,83 @@ def _postprocess_review_report_with_evidence(
     for item in kept_issues:
         if item.startswith("【已降级为建议"):
             suggestions.append(item)
+            _set_issue_outcome(
+                item,
+                "downgraded_to_suggestion",
+                "prefixed_issue_redirected_to_suggestion",
+                "prefixed_issue_redirected_to_suggestion",
+            )
             continue
         cleaned_issues.append(item)
     kept_issues = cleaned_issues
 
+    # Reconcile final dispositions with rendered output.
+    issue_set = set(kept_issues)
+    suggestion_issue_set = set(
+        str(item).replace("【已降级为建议（证据已覆盖或置信度不足）】", "", 1).strip()
+        for item in suggestions
+        if isinstance(item, str) and item.startswith("【已降级为建议")
+    )
+    for issue in issues:
+        outcome = issue_outcomes.get(issue)
+        if outcome is None:
+            if issue in issue_set:
+                _set_issue_outcome(issue, "kept_blocking", "fallback_kept_in_issues", "fallback_kept_in_issues")
+            elif issue in suggestion_issue_set:
+                _set_issue_outcome(
+                    issue,
+                    "downgraded_to_suggestion",
+                    "fallback_downgraded_to_suggestion",
+                    "fallback_downgraded_to_suggestion",
+                )
+            elif issue in covered_issue_set:
+                _set_issue_outcome(
+                    issue,
+                    "dropped_as_covered",
+                    "fallback_dropped_as_covered",
+                    "fallback_dropped_as_covered",
+                )
+            else:
+                _set_issue_outcome(
+                    issue,
+                    "dropped_by_policy",
+                    "fallback_dropped_by_policy",
+                    "fallback_dropped_by_policy",
+                )
+
+    # Consistency assertions recorded as diagnostics.
+    for issue, outcome in issue_outcomes.items():
+        final_disposition = str(outcome.get("final_disposition", ""))
+        if final_disposition == "kept_blocking" and issue not in issue_set:
+            consistency_errors.append(f"kept_blocking_not_in_issues:{issue}")
+        if final_disposition == "downgraded_to_suggestion" and issue not in suggestion_issue_set:
+            consistency_errors.append(f"downgraded_not_in_suggestions:{issue}")
+        if final_disposition.startswith("dropped_") and (
+            issue in issue_set or issue in suggestion_issue_set
+        ):
+            consistency_errors.append(f"dropped_but_still_rendered:{issue}")
+
     normalized["issues"] = kept_issues
     normalized["suggestions"] = suggestions
-    normalized["diagnostics"] = diagnostics + post_diagnostics
+    enriched_diagnostics: list[dict] = []
+    for item in diagnostics:
+        if not isinstance(item, dict):
+            enriched_diagnostics.append(item)
+            continue
+        issue_text = str(item.get("issue_text", ""))
+        outcome = issue_outcomes.get(issue_text, {})
+        decision = str(item.get("decision", ""))
+        enriched = dict(item)
+        enriched["raw_detection"] = decision
+        enriched["postprocess_action"] = outcome.get("postprocess_reason_code", "none")
+        enriched["final_disposition"] = outcome.get("final_disposition", "unknown")
+        enriched["postprocess_reason_code"] = outcome.get("postprocess_reason_code", "none")
+        enriched["postprocess_reason_text"] = outcome.get("postprocess_reason_text", "none")
+        enriched_diagnostics.append(enriched)
+
+    normalized["diagnostics"] = enriched_diagnostics + post_diagnostics
+    if consistency_errors:
+        normalized["consistency_errors"] = consistency_errors
 
     if kept_issues:
         normalized["passed"] = False
