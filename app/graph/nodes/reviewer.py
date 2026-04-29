@@ -423,6 +423,46 @@ def _issue_claims_missing_but_present(
     return any(_phrase_supported_by_items(phrase, evidence_items) for phrase in phrases)
 
 
+def _issue_terms_supported_by_evidence(
+    issue: str,
+    tasks: list[dict],
+    prompts: list[dict],
+    diag: dict | None = None,
+) -> bool:
+    issue_text = str(issue or "")
+    missing_markers = ("未发现", "未见", "缺少", "缺失", "未包含", "遗漏")
+    if not any(marker in issue_text for marker in missing_markers):
+        return False
+
+    issue_terms = [str(item).strip() for item in ((diag or {}).get("issue_terms", []) or []) if str(item).strip()]
+    if not issue_terms:
+        return False
+
+    corpus = " ".join(
+        [
+            " ".join(f"{str(t.get('title', ''))} {str(t.get('description', ''))}" for t in (tasks or [])),
+            " ".join(
+                f"{str(p.get('task_title', ''))} {str(p.get('coding_prompt', ''))} {str(p.get('test_prompt', ''))}"
+                for p in (prompts or [])
+            ),
+        ]
+    )
+    corpus_tokens = _pp_tokens(corpus)
+    corpus_bigrams = _cjk_bigrams(corpus)
+
+    matched = 0
+    for term in issue_terms[:8]:
+        term_tokens = _pp_tokens(term)
+        term_bigrams = _cjk_bigrams(term)
+        token_hit = bool(term_tokens and (term_tokens & corpus_tokens))
+        bigram_hit = bool(term_bigrams and len(term_bigrams & corpus_bigrams) >= max(1, int(len(term_bigrams) * 0.4)))
+        if token_hit or bigram_hit:
+            matched += 1
+
+    # Require at least two term hits to avoid overly loose downgrades.
+    return matched >= 2
+
+
 def _extract_quoted_phrases(text: str) -> list[str]:
     raw = re.findall(r"['‘“\"]([^'’”\"]{2,120})['’”\"]", str(text or ""))
     phrases: list[str] = []
@@ -594,6 +634,11 @@ def _postprocess_review_report_with_evidence(
     uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
     uncovered_set = set(uncovered)
     diagnostics = coverage_analysis.get("diagnostics", []) or []
+    covered_issue_set = {
+        str(item.get("issue_text", "")).strip()
+        for item in diagnostics
+        if isinstance(item, dict) and str(item.get("decision", "")) == "covered"
+    }
     dependency_check = detect_dependency_cycles(tasks)
     post_diagnostics: list[dict] = []
     diag_by_issue = {
@@ -605,17 +650,26 @@ def _postprocess_review_report_with_evidence(
     explicit_downgraded: set[str] = set()
     cycle_issue_seen = False
     rendered_cycle_issues: list[str] = []
+
+    def _append_downgrade_diag(issue_text: str, issue_type: str, decision: str, reason: str) -> None:
+        post_diagnostics.append(
+            {
+                "issue_text": issue_text,
+                "issue_type": issue_type,
+                "decision": decision,
+                "reason": reason,
+            }
+        )
+
     for issue in issues:
         if _issue_is_research_timing_dispute(issue, tasks):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
-            post_diagnostics.append(
-                {
-                    "issue_text": issue,
-                    "issue_type": "dependency_timing",
-                    "decision": "downgraded_research_timing_dispute",
-                    "reason": "research_task_can_be_preflight_with_empty_depends_on",
-                }
+            _append_downgrade_diag(
+                issue,
+                "dependency_timing",
+                "downgraded_research_timing_dispute",
+                "research_task_can_be_preflight_with_empty_depends_on",
             )
             continue
 
@@ -627,6 +681,12 @@ def _postprocess_review_report_with_evidence(
                 if not alignment.get("aligned"):
                     downgraded_issues.append(issue)
                     explicit_downgraded.add(issue)
+                    _append_downgrade_diag(
+                        issue,
+                        "dependency_cycle",
+                        "downgraded_cycle_claim_not_aligned",
+                        "cycle_claim_mismatch_with_detected_cycles",
+                    )
                     suggestions.append(
                         "【循环依赖说明已重写】原评审链条与结构化依赖图不一致，已按真实环路重写阻塞问题。"
                     )
@@ -654,6 +714,7 @@ def _postprocess_review_report_with_evidence(
                         "issue_text": issue,
                         "issue_type": "dependency_cycle",
                         "decision": "downgraded_no_cycle",
+                        "reason": "no_structural_cycle_detected",
                         "has_cycle": False,
                     }
                 )
@@ -662,26 +723,22 @@ def _postprocess_review_report_with_evidence(
         if _is_dependency_timing_issue_text(issue):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
-            post_diagnostics.append(
-                {
-                    "issue_text": issue,
-                    "issue_type": "dependency_timing",
-                    "decision": "downgraded_dependency_timing",
-                    "reason": "dependency_timing_dispute_should_not_block_without_structural_cycle",
-                }
+            _append_downgrade_diag(
+                issue,
+                "dependency_timing",
+                "downgraded_dependency_timing",
+                "dependency_timing_dispute_should_not_block_without_structural_cycle",
             )
             continue
 
         if _is_performance_data_sufficiency_issue(issue) and _has_performance_validation_spec(tasks, prompts):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
-            post_diagnostics.append(
-                {
-                    "issue_text": issue,
-                    "issue_type": "performance_validation",
-                    "decision": "downgraded_perf_data_sufficient",
-                    "reason": "performance_spec_contains_metric_threshold_and_data_scale",
-                }
+            _append_downgrade_diag(
+                issue,
+                "performance_validation",
+                "downgraded_perf_data_sufficient",
+                "performance_spec_contains_metric_threshold_and_data_scale",
             )
             continue
 
@@ -692,6 +749,29 @@ def _postprocess_review_report_with_evidence(
             diag_by_issue.get(issue, {}),
         ):
             downgraded_issues.append(issue)
+            explicit_downgraded.add(issue)
+            _append_downgrade_diag(
+                issue,
+                "missing_claim",
+                "downgraded_missing_claim_present",
+                "missing_capability_claim_already_present_in_tasks_or_prompts",
+            )
+            continue
+
+        if _issue_terms_supported_by_evidence(
+            issue,
+            tasks,
+            prompts,
+            diag_by_issue.get(issue, {}),
+        ):
+            downgraded_issues.append(issue)
+            explicit_downgraded.add(issue)
+            _append_downgrade_diag(
+                issue,
+                "missing_claim_terms",
+                "downgraded_terms_supported",
+                "issue_terms_have_multi_hit_evidence_in_tasks_or_prompts",
+            )
             continue
 
         if issue in uncovered_set:
@@ -703,6 +783,13 @@ def _postprocess_review_report_with_evidence(
                 diag_by_issue.get(issue, {}),
             ):
                 downgraded_issues.append(issue)
+                explicit_downgraded.add(issue)
+                _append_downgrade_diag(
+                    issue,
+                    "contradiction_evidence",
+                    "downgraded_contradiction_evidence",
+                    "suggestion_and_task_prompt_evidence_contradict_missing_claim",
+                )
                 continue
             kept_issues.append(issue)
             continue
@@ -741,15 +828,24 @@ def _postprocess_review_report_with_evidence(
             kept_issues.append(issue)
         else:
             downgraded_issues.append(issue)
+            _append_downgrade_diag(
+                issue,
+                "generic",
+                "downgraded_generic",
+                f"decision={decision or 'unknown'};low_signal={low_signal_uncovered};weak_single_source={weak_single_source_uncovered}",
+            )
 
     if cycle_issue_seen and dependency_check.get("has_cycle"):
         for item in rendered_cycle_issues:
             if item and item not in kept_issues:
                 kept_issues.append(item)
 
-    if downgraded_issues:
+    downgraded_for_suggestions = [
+        item for item in downgraded_issues if str(item).strip() and str(item).strip() not in covered_issue_set
+    ]
+    if downgraded_for_suggestions:
         suggestions.extend(
-            [f"【已降级为建议（证据已覆盖或置信度不足）】{item}" for item in downgraded_issues]
+            [f"【已降级为建议（证据已覆盖或置信度不足）】{item}" for item in downgraded_for_suggestions]
         )
 
     # Final consistency guard:

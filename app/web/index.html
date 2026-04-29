@@ -1083,7 +1083,21 @@
         completedSections.innerHTML = sectionDefs.map((section) => {
           let value = null;
           if (section.key === "__review_diagnostics__") {
-            value = reviewDiagnostics;
+            const blocking = reviewDiagnostics.filter((item) => {
+              if (!item || typeof item !== "object") return false;
+              const decision = String(item.decision || "");
+              return item.is_blocking === true || decision === "blocking_uncovered" || decision === "blocking_cycle_confirmed";
+            });
+            const handled = reviewDiagnostics.filter((item) => !blocking.includes(item));
+            value = {
+              summary: {
+                total: reviewDiagnostics.length,
+                blocking_count: blocking.length,
+                handled_count: handled.length
+              },
+              blocking,
+              handled
+            };
           } else if (Object.prototype.hasOwnProperty.call(data.result, section.key)) {
             value = data.result[section.key];
           }

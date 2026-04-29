@@ -93,3 +93,65 @@ def test_detect_dependency_cycles_handles_acyclic_graph():
     result = detect_dependency_cycles(tasks)
     assert result["has_cycle"] is False
     assert result["cycles"] == []
+
+
+def test_coverage_engine_weak_match_recovery_marks_as_covered():
+    tasks = [
+        {
+            "title": "实现附件归档策略与定时清理任务",
+            "description": "附件默认保留5年，超期自动归档，定时任务每日执行并记录日志。",
+            "depends_on": [],
+        }
+    ]
+    prompts = [
+        {
+            "task_title": "实现附件归档策略与定时清理任务",
+            "coding_prompt": "实现归档策略和定时清理机制。",
+            "test_prompt": "覆盖5年保留与超期归档场景。",
+        }
+    ]
+    issues = [
+        "【关键需求遗漏】需求明确要求'附件默认保留5年，超期自动归档'，但任务列表中未见附件管理、归档策略、定时清理相关任务，合规性功能缺失"
+    ]
+
+    result = analyze_blocking_issue_coverage(
+        tasks,
+        issues,
+        prompt_pack=prompts,
+        min_evidence_hits=2,
+        min_confidence=0.65,
+        blocking_confidence=0.75,
+    )
+    assert result["uncovered"] == []
+    assert result["diagnostics"][0]["decision"] == "covered"
+
+
+def test_coverage_engine_compound_security_terms_mark_as_covered():
+    tasks = [
+        {
+            "title": "实现安全审计与访问日志留存",
+            "description": "实现数据脱敏、访问日志记录与安全审计检查。",
+            "depends_on": [],
+        }
+    ]
+    prompts = [
+        {
+            "task_title": "实现安全审计与访问日志留存",
+            "coding_prompt": "实现访问日志与脱敏处理。",
+            "test_prompt": "覆盖审计与合规验证场景。",
+        }
+    ]
+    issues = [
+        "缺少安全合规验证任务：关键约束要求数据符合公司信息安全规范，但未发现安全审计、数据脱敏、访问日志等合规验证任务"
+    ]
+
+    result = analyze_blocking_issue_coverage(
+        tasks,
+        issues,
+        prompt_pack=prompts,
+        min_evidence_hits=2,
+        min_confidence=0.65,
+        blocking_confidence=0.75,
+    )
+    assert result["uncovered"] == []
+    assert result["diagnostics"][0]["decision"] == "covered"

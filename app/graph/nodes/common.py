@@ -146,7 +146,14 @@ def _extract_issue_terms(issue: str, max_terms: int = 4) -> list[str]:
     }
     terms: list[str] = []
     for token in tokens:
+        token = _normalize_term(token)
+        if not token:
+            continue
         if token in stop_words:
+            continue
+        if token in _NOISE_TERMS:
+            continue
+        if any(noise in token for noise in _NOISE_TERMS):
             continue
         if token not in terms:
             terms.append(token)
@@ -156,7 +163,20 @@ def _extract_issue_terms(issue: str, max_terms: int = 4) -> list[str]:
 
 
 def _tokenize_text(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", _normalize_text(text))
+    raw_tokens = re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", _normalize_text(text))
+    tokens: list[str] = []
+    for item in raw_tokens:
+        normalized = _normalize_term(item)
+        if not normalized:
+            continue
+        tokens.append(normalized)
+        if len(normalized) >= 4:
+            for cluster_terms in _META_CAPABILITY_CLUSTERS.values():
+                for term in cluster_terms:
+                    term_norm = _normalize_term(term)
+                    if len(term_norm) >= 2 and term_norm in normalized and term_norm != normalized:
+                        tokens.append(term_norm)
+    return tokens
 
 
 _ACTION_MARKERS: tuple[str, ...] = (
@@ -198,6 +218,49 @@ _CLUSTER_STOP_WORDS: set[str] = {
     "逻辑",
 }
 
+_NOISE_TERMS: set[str] = {
+    "需求明确要求",
+    "任务列表中未见",
+    "任务列表中未发现",
+    "任务清单中缺少",
+    "关键需求遗漏",
+    "功能缺失",
+    "默认",
+    "超期",
+    "自动",
+}
+
+_TERM_NORMALIZATION_PAIRS: tuple[tuple[str, str], ...] = (
+    ("压测", "性能验证"),
+    ("基准测试", "性能验证"),
+    ("性能基准", "性能验证"),
+    ("性能测试", "性能验证"),
+    ("压测验证", "性能验证"),
+    ("核验", "验证"),
+    ("校验", "验证"),
+    ("校核", "验证"),
+    ("归档", "留存"),
+    ("保留", "留存"),
+    ("留档", "留存"),
+    ("清理", "回收"),
+    ("删除", "回收"),
+    ("回收", "回收"),
+    ("报警", "告警"),
+    ("预警", "告警"),
+    ("鉴权", "认证"),
+    ("授权", "认证"),
+    ("认证授权", "认证"),
+    ("退化", "降级"),
+    ("回退", "回滚"),
+    ("回补", "补偿"),
+    ("补救", "补偿"),
+    ("去重", "幂等"),
+    ("防重", "幂等"),
+    ("串联", "联调"),
+    ("对接", "联调"),
+    ("追踪", "链路"),
+)
+
 _META_CAPABILITY_CLUSTERS: dict[str, tuple[str, ...]] = {
     "delivery": ("前端", "后端", "联调", "页面", "接口", "交付", "端到端"),
     "data_integrity": ("幂等", "一致性", "状态机", "事务", "锁", "回滚", "补偿"),
@@ -220,6 +283,30 @@ def _jaccard_similarity(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(union)
 
 
+def _token_overlap_f1(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    if inter <= 0:
+        return 0.0
+    precision = inter / max(1, len(a))
+    recall = inter / max(1, len(b))
+    denom = precision + recall
+    if denom <= 0:
+        return 0.0
+    return (2 * precision * recall) / denom
+
+
+def _normalize_term(term: str) -> str:
+    normalized = str(term or "").strip().lower()
+    if not normalized:
+        return ""
+    for src, dst in _TERM_NORMALIZATION_PAIRS:
+        if src in normalized:
+            normalized = normalized.replace(src, dst)
+    return normalized
+
+
 def _sequence_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
@@ -236,6 +323,22 @@ def _extract_action_object_pairs(text: str) -> set[tuple[str, str]]:
             if obj:
                 pairs.add((action, obj))
     return pairs
+
+
+def _structure_overlap_score(
+    issue_pairs: set[tuple[str, str]], source_pairs: set[tuple[str, str]]
+) -> float:
+    if not issue_pairs or not source_pairs:
+        return 0.0
+    hit = 0
+    for ia, io in issue_pairs:
+        for sa, so in source_pairs:
+            if ia != sa:
+                continue
+            if io == so or io in so or so in io:
+                hit += 1
+                break
+    return hit / max(1, len(issue_pairs))
 
 
 def _build_dynamic_clusters(texts: list[str], top_k: int = 8) -> dict[str, set[str]]:
@@ -305,6 +408,21 @@ def _extract_issue_focus(issue: str) -> tuple[str, float]:
     return "", 0.4
 
 
+def _extract_quoted_requirements(issue: str, max_items: int = 3) -> list[str]:
+    text = _normalize_text(issue)
+    matches = re.findall(r"['‘“\"]([^'’”\"]{2,120})['’”\"]", text)
+    requirements: list[str] = []
+    for item in matches:
+        normalized = _normalize_text(str(item))
+        if not normalized:
+            continue
+        if normalized not in requirements:
+            requirements.append(normalized)
+        if len(requirements) >= max_items:
+            break
+    return requirements
+
+
 def _build_evidence_sources(
     tasks: list[dict[str, Any]],
     prompt_pack: list[dict[str, Any]] | None = None,
@@ -357,16 +475,15 @@ def _source_hit(
         keyword_score = max(keyword_score, 1.0)
 
     semantic_token_score = _jaccard_similarity(keyword_terms, source_tokens)
+    semantic_f1_score = _token_overlap_f1(keyword_terms, source_tokens)
     semantic_char_score = _sequence_similarity(capability or " ".join(issue_terms[:3]), source_text)
-    semantic_score = max(semantic_token_score, semantic_char_score)
+    semantic_score = max(semantic_token_score, semantic_f1_score, semantic_char_score)
     if direct_capability_match:
         semantic_score = max(semantic_score, 0.9)
 
     issue_pairs = _extract_action_object_pairs(capability + " " + " ".join(issue_terms))
     source_pairs = _extract_action_object_pairs(source_text)
-    structure_score = 0.0
-    if issue_pairs and source_pairs:
-        structure_score = 1.0 if (issue_pairs & source_pairs) else 0.0
+    structure_score = _structure_overlap_score(issue_pairs, source_pairs)
 
     dynamic_score, _ = _cluster_overlap_score(
         keyword_terms,
@@ -386,7 +503,10 @@ def _source_hit(
         + (_DYNAMIC_CLUSTER_WEIGHT * dynamic_score)
         + (_META_CLUSTER_WEIGHT * meta_score)
     )
-    is_hit = score >= 0.55
+    hit_threshold = 0.55
+    if direct_capability_match or keyword_score >= 0.5:
+        hit_threshold = 0.42
+    is_hit = score >= hit_threshold
     components = {
         "keyword": round(keyword_score, 3),
         "semantic": round(semantic_score, 3),
@@ -432,6 +552,7 @@ def analyze_blocking_issue_coverage(
         matched_sources: list[str] = []
         source_scores: dict[str, float] = {}
         source_components: dict[str, dict[str, float]] = {}
+        soft_source_hits = 0
         for source_name, source_text in sources.items():
             is_hit, score, components = _source_hit(
                 capability,
@@ -444,6 +565,8 @@ def analyze_blocking_issue_coverage(
             source_components[source_name] = components
             if is_hit:
                 matched_sources.append(source_name)
+            if score >= 0.35:
+                soft_source_hits += 1
 
         evidence_hits = len(matched_sources)
         source_support = sum(source_weights.get(name, 0.0) for name in matched_sources)
@@ -456,10 +579,78 @@ def analyze_blocking_issue_coverage(
         # - cross-source support breadth (how many weighted sources hit)
         # - average quality on matched sources
         coverage_confidence = (0.65 * source_support) + (0.35 * avg_match_quality)
+        effective_evidence_hits = evidence_hits
+
+        medium_source_hits = sum(1 for score in source_scores.values() if float(score) >= 0.40)
+        max_source_score = max(source_scores.values()) if source_scores else 0.0
+        max_keyword_score = 0.0
+        for comp in source_components.values():
+            if isinstance(comp, dict):
+                max_keyword_score = max(max_keyword_score, float(comp.get("keyword", 0.0) or 0.0))
+        source_token_set = set(_tokenize_text(" ".join(source_texts)))
+        issue_term_hit_count = len(set(issue_terms) & source_token_set)
+        if issue_term_hit_count >= 2 and soft_source_hits > 0:
+            effective_evidence_hits += 1
         is_covered = (
-            evidence_hits >= max(1, int(min_evidence_hits))
+            effective_evidence_hits >= max(1, int(min_evidence_hits))
             and coverage_confidence >= float(min_confidence)
         )
+        source_joined_text = " ".join(source_texts)
+        missing_claim_markers = ("未见", "未发现", "缺少", "遗漏")
+        missing_capability_hits = 0
+        if capability and any(marker in issue_text for marker in missing_claim_markers):
+            parts = re.split(r"[、,，/\\+\s]+", capability)
+            key_parts = [str(p).strip() for p in parts if str(p).strip() and len(str(p).strip()) >= 2]
+            seen_parts: set[str] = set()
+            for part in key_parts:
+                if part in seen_parts:
+                    continue
+                seen_parts.add(part)
+                if part in source_joined_text:
+                    missing_capability_hits += 1
+        quoted_requirement_hits = 0
+        for quoted_req in _extract_quoted_requirements(issue_text, max_items=3):
+            req_tokens = [tok for tok in _tokenize_text(quoted_req) if len(tok) >= 2]
+            if not req_tokens:
+                continue
+            token_hits = sum(1 for tok in set(req_tokens) if tok in source_joined_text)
+            if token_hits >= max(2, min(3, len(set(req_tokens)))):
+                quoted_requirement_hits += 1
+        issue_term_phrase_hits = 0
+        seen_issue_terms: set[str] = set()
+        for term in issue_terms:
+            t = str(term).strip()
+            if not t or t in seen_issue_terms:
+                continue
+            seen_issue_terms.add(t)
+            if len(t) < 2:
+                continue
+            if t in source_joined_text:
+                issue_term_phrase_hits += 1
+        weak_covered = (
+            not is_covered
+            and max_source_score >= 0.45
+            and medium_source_hits >= 2
+            and issue_term_hit_count >= 2
+        )
+        borderline_semantic_cover = (
+            not is_covered
+            and issue_term_hit_count >= 2
+            and max_source_score >= 0.30
+            and max_keyword_score >= 0.14
+        )
+        missing_claim_phrase_cover = (
+            not is_covered
+            and any(marker in issue_text for marker in missing_claim_markers)
+            and (
+                issue_term_hit_count >= 2
+                or missing_capability_hits >= 2
+                or issue_term_phrase_hits >= 2
+                or quoted_requirement_hits >= 1
+            )
+        )
+        if weak_covered or borderline_semantic_cover or missing_claim_phrase_cover:
+            is_covered = True
 
         missing_confidence = parse_confidence * max(0.2, 1.0 - coverage_confidence)
         if is_covered:
@@ -479,6 +670,8 @@ def analyze_blocking_issue_coverage(
                 "evidence_checked": list(sources.keys()),
                 "matched_evidence": matched_sources,
                 "evidence_hits": evidence_hits,
+                "effective_evidence_hits": int(effective_evidence_hits),
+                "soft_source_hits": int(soft_source_hits),
                 "source_support": round(source_support, 3),
                 "avg_match_quality": round(avg_match_quality, 3),
                 "coverage_confidence": round(coverage_confidence, 3),
@@ -500,6 +693,16 @@ def analyze_blocking_issue_coverage(
                 "why_not_matched": ""
                 if matched_sources
                 else "no sufficient cross-source evidence",
+                "weak_covered": weak_covered,
+                "borderline_semantic_cover": borderline_semantic_cover,
+                "missing_claim_phrase_cover": missing_claim_phrase_cover,
+                "missing_capability_hits": int(missing_capability_hits),
+                "quoted_requirement_hits": int(quoted_requirement_hits),
+                "issue_term_phrase_hits": int(issue_term_phrase_hits),
+                "medium_source_hits": medium_source_hits,
+                "max_source_score": round(float(max_source_score), 3),
+                "max_keyword_score": round(float(max_keyword_score), 3),
+                "issue_term_hit_count": int(issue_term_hit_count),
             }
         )
 
