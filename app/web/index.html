@@ -890,13 +890,12 @@
 
       function refreshActionButtons() {
         const workflowLocked = loading || executionInProgress;
-        const infoRefreshLocked = loading && !executionInProgress;
         runBtn.disabled = workflowLocked;
         continueBtn.disabled = workflowLocked;
         resumeBtn.disabled = workflowLocked;
-        stateBtn.disabled = infoRefreshLocked;
-        historyBtn.disabled = infoRefreshLocked;
-        hydrateResultBtn.disabled = infoRefreshLocked;
+        stateBtn.disabled = false;
+        historyBtn.disabled = false;
+        hydrateResultBtn.disabled = false;
         purgeBtn.disabled = loading;
         genProjectIdBtn.disabled = loading;
         agentLoadBtn.disabled = loading;

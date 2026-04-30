@@ -706,13 +706,14 @@ def _postprocess_review_report_with_evidence(
     tasks: list[dict],
     prompts: list[dict],
     review_report: dict,
-) -> tuple[dict, bool]:
+    term_cluster_memory: dict | None = None,
+) -> tuple[dict, bool, dict]:
     normalized = dict(review_report or {})
     issues = [str(item) for item in (normalized.get("issues", []) or [])]
     suggestions = [str(item) for item in (normalized.get("suggestions", []) or [])]
     if not issues:
         passed = bool(normalized.get("passed"))
-        return normalized, passed
+        return normalized, passed, dict(term_cluster_memory or {})
 
     coverage_analysis = analyze_blocking_issue_coverage(
         tasks,
@@ -721,6 +722,7 @@ def _postprocess_review_report_with_evidence(
         min_evidence_hits=settings.coverage_min_evidence_hits,
         min_confidence=settings.coverage_min_confidence,
         blocking_confidence=settings.coverage_blocking_confidence,
+        term_cluster_memory=term_cluster_memory,
     )
     uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
     uncovered_set = set(uncovered)
@@ -1174,7 +1176,12 @@ def _postprocess_review_report_with_evidence(
         normalized["passed"] = False
     else:
         normalized["passed"] = True
-    return normalized, bool(normalized["passed"])
+    updated_memory = (
+        coverage_analysis.get("term_cluster_memory", {})
+        if isinstance(coverage_analysis, dict)
+        else {}
+    )
+    return normalized, bool(normalized["passed"]), updated_memory
 
 
 def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> dict | None:
@@ -1311,6 +1318,7 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     review_rounds = int(state.get("review_rounds", 0) or 0)
     max_review_rounds = int(state.get("max_review_rounds", settings.review_max_rounds))
     previous_review = state.get("review_report", {}) or {}
+    term_cluster_memory = dict(state.get("term_cluster_memory", {}) or {})
 
     assumption_review = _build_assumption_pack_review(
         state.get("assumption_pack", {}),
@@ -1345,7 +1353,9 @@ def reviewer_node(state: ProjectState) -> ProjectState:
             min_evidence_hits=settings.coverage_min_evidence_hits,
             min_confidence=settings.coverage_min_confidence,
             blocking_confidence=settings.coverage_blocking_confidence,
+            term_cluster_memory=term_cluster_memory,
         )
+        term_cluster_memory = dict(coverage_analysis.get("term_cluster_memory", {}) or term_cluster_memory)
         uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
         downgraded = [str(item) for item in (coverage_analysis.get("downgraded", []) or [])]
         timing_uncovered = [item for item in uncovered if _issue_is_research_timing_dispute(item, tasks)]
@@ -1401,7 +1411,8 @@ def reviewer_node(state: ProjectState) -> ProjectState:
                 "suggestions": suggestions,
                 "diagnostics": coverage_analysis.get("diagnostics", []),
             }
-            return _apply_review_outcome(state, review_report, passed=False)
+            updated_state = {**state, "term_cluster_memory": term_cluster_memory}
+            return _apply_review_outcome(updated_state, review_report, passed=False)
 
     project_id = str(state.get("project_id", "") or state.get("thread_id", "") or "unknown")
     cache_payload = _build_reviewer_cache_payload(
@@ -1415,14 +1426,16 @@ def reviewer_node(state: ProjectState) -> ProjectState:
     )
     cached_review = load_cached_review(project_id, cache_payload)
     if cached_review is not None:
-        cached_review, passed = _postprocess_review_report_with_evidence(
+        cached_review, passed, term_cluster_memory = _postprocess_review_report_with_evidence(
             tasks=tasks,
             prompts=prompts,
             review_report=cached_review,
+            term_cluster_memory=term_cluster_memory,
         )
         cached_review, passed = _normalize_review_passed(cached_review)
+        updated_state = {**state, "term_cluster_memory": term_cluster_memory}
         return _apply_review_outcome(
-            state,
+            updated_state,
             review_report=cached_review,
             passed=passed,
         )
@@ -1462,11 +1475,13 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         }
     )
     structured = extract_structured_response(result)
-    review_report, passed = _postprocess_review_report_with_evidence(
+    review_report, passed, term_cluster_memory = _postprocess_review_report_with_evidence(
         tasks=tasks,
         prompts=prompts,
         review_report=structured.model_dump(),
+        term_cluster_memory=term_cluster_memory,
     )
     review_report, passed = _normalize_review_passed(review_report)
     save_cached_review(project_id, cache_payload, review_report)
-    return _apply_review_outcome(state, review_report, passed=passed)
+    updated_state = {**state, "term_cluster_memory": term_cluster_memory}
+    return _apply_review_outcome(updated_state, review_report, passed=passed)

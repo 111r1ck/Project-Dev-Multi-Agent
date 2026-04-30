@@ -2,7 +2,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -165,6 +165,16 @@ async def run_project_analysis(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": req.project_id}}
+    preserved_term_cluster_memory: dict[str, Any] = {}
+    try:
+        snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+        values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+        memory = values.get("term_cluster_memory", {})
+        if isinstance(memory, dict):
+            preserved_term_cluster_memory = memory
+    except Exception:
+        preserved_term_cluster_memory = {}
+
     result = await run_in_threadpool(
         compiled_graph.invoke,
         {
@@ -181,6 +191,7 @@ async def run_project_analysis(
             "review_rounds": 0,
             "max_review_rounds": settings.review_max_rounds,
             "next_step": "requirement_analyst",
+            "term_cluster_memory": preserved_term_cluster_memory,
         },
         config,
     )
@@ -337,7 +348,13 @@ async def get_project_run_history(
 
 @router.delete("/{project_id}/checkpoints")
 async def delete_project_checkpoints(project_id: str):
-    result = await run_in_threadpool(purge_thread_checkpoints, project_id)
+    try:
+        result = await run_in_threadpool(purge_thread_checkpoints, project_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除 checkpoints 失败: {type(exc).__name__}: {exc}",
+        ) from exc
     return {
         "project_id": project_id,
         "status": "deleted",

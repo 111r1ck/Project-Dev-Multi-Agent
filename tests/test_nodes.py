@@ -1529,3 +1529,72 @@ def test_reviewer_keeps_dependency_timing_blocking_when_foundation_reverse_depen
     ]
     assert matched
     assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
+def test_reviewer_node_persists_term_cluster_memory_across_runs(monkeypatch):
+    class MemoryLearningReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=["Missing security compliance validation task"],
+                    suggestions=[],
+                )
+            }
+
+    call_inputs: list[dict] = []
+
+    def fake_coverage(tasks, issues, **kwargs):
+        incoming_memory = dict(kwargs.get("term_cluster_memory", {}) or {})
+        call_inputs.append(incoming_memory)
+        co = dict(incoming_memory.get("cooccurrence", {}) or {})
+        key = "security||compliance"
+        co[key] = int(co.get(key, 0)) + 1
+        return {
+            "uncovered": [],
+            "downgraded": list(issues),
+            "diagnostics": [
+                {
+                    "issue_text": "Missing security compliance validation task",
+                    "decision": "downgraded_uncovered",
+                    "is_blocking": False,
+                }
+            ],
+            "term_cluster_memory": {"cooccurrence": co},
+            "learned_clusters": {},
+        }
+
+    monkeypatch.setattr("app.graph.nodes.reviewer.analyze_blocking_issue_coverage", fake_coverage)
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: MemoryLearningReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+
+    base_state = {
+        "project_id": "memory-e2e-project",
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [{"title": "Security task", "description": "Implement audit and compliance checks", "priority": "P0", "depends_on": []}],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    first = reviewer_node(base_state)
+    first_memory = dict(first.get("term_cluster_memory", {}) or {})
+    assert isinstance(first_memory.get("cooccurrence", {}), dict)
+    assert int(first_memory.get("cooccurrence", {}).get("security||compliance", 0)) == 1
+
+    second = reviewer_node(first)
+    second_memory = dict(second.get("term_cluster_memory", {}) or {})
+    assert int(second_memory.get("cooccurrence", {}).get("security||compliance", 0)) > int(
+        first_memory.get("cooccurrence", {}).get("security||compliance", 0)
+    )
+    assert len(call_inputs) >= 2
+    assert call_inputs[0] == {}
+    assert int(call_inputs[1].get("cooccurrence", {}).get("security||compliance", 0)) == 1

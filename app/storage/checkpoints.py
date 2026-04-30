@@ -165,15 +165,42 @@ def purge_thread_checkpoints(thread_id: str) -> dict[str, Any]:
         if backend == "postgres":
             if conn is None:
                 raise RuntimeError("postgres checkpointer connection is unavailable")
+
+            def _first_value(row: Any) -> Any:
+                if row is None:
+                    return None
+                if isinstance(row, dict):
+                    for _k, v in row.items():
+                        return v
+                    return None
+                try:
+                    return row[0]
+                except Exception:
+                    return row
+
             with conn.cursor() as cur:
                 existing_tables: set[str] = set()
+                thread_scoped_tables: set[str] = set()
                 for table in tables:
                     cur.execute("SELECT to_regclass(%s)", (table,))
                     row = cur.fetchone()
-                    if row and row[0]:
+                    if _first_value(row):
                         existing_tables.add(table)
+                for table in existing_tables:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = %s
+                          AND column_name = 'thread_id'
+                        LIMIT 1
+                        """,
+                        (table,),
+                    )
+                    if cur.fetchone():
+                        thread_scoped_tables.add(table)
                 for table in tables:
-                    if table not in existing_tables:
+                    if table not in thread_scoped_tables:
                         continue
                     cur.execute(
                         f'DELETE FROM "{table}" WHERE thread_id = %s',

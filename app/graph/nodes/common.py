@@ -515,6 +515,112 @@ def _build_dynamic_clusters(texts: list[str], top_k: int = 8) -> dict[str, set[s
     return clusters
 
 
+def _merge_clusters(
+    base: dict[str, set[str]],
+    extra: dict[str, set[str]],
+    *,
+    max_terms_per_cluster: int = 8,
+) -> dict[str, set[str]]:
+    merged: dict[str, set[str]] = {k: set(v) for k, v in (base or {}).items()}
+    for center, terms in (extra or {}).items():
+        if center not in merged:
+            merged[center] = set(terms)
+        else:
+            merged[center].update(set(terms))
+        if len(merged[center]) > max_terms_per_cluster:
+            merged[center] = set(sorted(merged[center])[:max_terms_per_cluster])
+    return merged
+
+
+def _build_project_dynamic_clusters_from_memory(
+    term_cluster_memory: dict[str, Any] | None,
+) -> dict[str, set[str]]:
+    memory = term_cluster_memory or {}
+    pairs = memory.get("cooccurrence", {}) if isinstance(memory, dict) else {}
+    if not isinstance(pairs, dict) or not pairs:
+        return {}
+    clusters: dict[str, set[str]] = {}
+    # pair key format: "a||b"
+    adjacency: dict[str, dict[str, int]] = {}
+    for key, value in pairs.items():
+        if not isinstance(key, str) or "||" not in key:
+            continue
+        a, b = key.split("||", 1)
+        a = _normalize_term(a)
+        b = _normalize_term(b)
+        if not a or not b:
+            continue
+        score = int(value or 0)
+        if score <= 0:
+            continue
+        adjacency.setdefault(a, {})[b] = adjacency.setdefault(a, {}).get(b, 0) + score
+        adjacency.setdefault(b, {})[a] = adjacency.setdefault(b, {}).get(a, 0) + score
+
+    for center, neighbors in adjacency.items():
+        ranked = sorted(neighbors.items(), key=lambda kv: (-kv[1], kv[0]))
+        selected = [term for term, score in ranked if score >= 2][:4]
+        if selected:
+            clusters[center] = {center, *selected}
+    return clusters
+
+
+def _update_term_cluster_memory(
+    term_cluster_memory: dict[str, Any] | None,
+    tasks: list[dict[str, Any]],
+    prompt_pack: list[dict[str, Any]] | None,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    memory = dict(term_cluster_memory or {})
+    co = memory.get("cooccurrence", {})
+    if not isinstance(co, dict):
+        co = {}
+
+    source_text = " ".join(
+        [
+            " ".join(
+                [
+                    str(item.get("title", "")),
+                    str(item.get("description", "")),
+                    " ".join(str(dep) for dep in (item.get("depends_on", []) or [])),
+                ]
+            )
+            for item in (tasks or [])
+        ]
+        + [
+            " ".join(
+                [
+                    str(item.get("task_title", "")),
+                    str(item.get("coding_prompt", "")),
+                    str(item.get("test_prompt", "")),
+                ]
+            )
+            for item in (prompt_pack or [])
+        ]
+    )
+    source_tokens = [tok for tok in _tokenize_text(source_text) if len(tok) >= 2]
+    source_token_set = set(source_tokens)
+
+    for item in diagnostics or []:
+        if not isinstance(item, dict):
+            continue
+        decision = str(item.get("decision", ""))
+        # Learn primarily from successful/soft-successful coverage outcomes.
+        if decision not in {"covered", "downgraded_uncovered"}:
+            continue
+        terms = [str(t) for t in (item.get("issue_terms", []) or []) if str(t).strip()]
+        normalized_terms = [_normalize_term(t) for t in terms]
+        normalized_terms = [t for t in normalized_terms if t and t in source_token_set]
+        uniq_terms = list(dict.fromkeys(normalized_terms))[:10]
+        for i in range(len(uniq_terms)):
+            for j in range(i + 1, len(uniq_terms)):
+                a, b = sorted([uniq_terms[i], uniq_terms[j]])
+                key = f"{a}||{b}"
+                co[key] = int(co.get(key, 0)) + 1
+
+    memory["cooccurrence"] = co
+    return memory
+
+
 def _cluster_overlap_score(
     target_tokens: set[str],
     source_tokens: set[str],
@@ -665,10 +771,13 @@ def analyze_blocking_issue_coverage(
     min_evidence_hits: int = 2,
     min_confidence: float = 0.65,
     blocking_confidence: float = 0.75,
+    term_cluster_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sources = _build_evidence_sources(tasks, prompt_pack=prompt_pack)
     source_texts = [str(v) for v in sources.values() if str(v).strip()]
     dynamic_clusters = _build_dynamic_clusters(source_texts, top_k=8)
+    learned_clusters = _build_project_dynamic_clusters_from_memory(term_cluster_memory)
+    dynamic_clusters = _merge_clusters(dynamic_clusters, learned_clusters, max_terms_per_cluster=8)
     meta_clusters = {k: set(v) for k, v in _META_CAPABILITY_CLUSTERS.items()}
     source_weights = {
         "task_title": 0.30,
@@ -851,6 +960,13 @@ def analyze_blocking_issue_coverage(
         "uncovered": uncovered,
         "downgraded": downgraded,
         "diagnostics": diagnostics,
+        "term_cluster_memory": _update_term_cluster_memory(
+            term_cluster_memory,
+            tasks,
+            prompt_pack,
+            diagnostics,
+        ),
+        "learned_clusters": {k: sorted(list(v)) for k, v in list(learned_clusters.items())[:16]},
     }
 
 

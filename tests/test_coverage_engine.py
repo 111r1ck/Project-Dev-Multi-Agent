@@ -186,3 +186,73 @@ def test_coverage_engine_english_missing_claim_marks_as_covered():
     )
     assert result["uncovered"] == []
     assert result["diagnostics"][0]["decision"] == "covered"
+
+
+def test_coverage_engine_term_cluster_memory_grows_and_supports_second_round():
+    tasks_round1 = [
+        {
+            "title": "Implement security audit and access log retention",
+            "description": "Add compliance checks, access log recording, and security audit verification.",
+            "depends_on": [],
+        }
+    ]
+    prompts_round1 = [
+        {
+            "task_title": "Implement security audit and access log retention",
+            "coding_prompt": "Implement audit log and compliance controls.",
+            "test_prompt": "Cover security audit and access log compliance scenarios.",
+        }
+    ]
+    issues_round1 = [
+        "Missing security compliance validation task: requirement requires security audit and access log controls"
+    ]
+
+    first = analyze_blocking_issue_coverage(
+        tasks_round1,
+        issues_round1,
+        prompt_pack=prompts_round1,
+        min_evidence_hits=2,
+        min_confidence=0.65,
+        blocking_confidence=0.75,
+        term_cluster_memory={},
+    )
+    memory_after_first = first.get("term_cluster_memory", {})
+    assert isinstance(memory_after_first, dict)
+    assert isinstance(memory_after_first.get("cooccurrence", {}), dict)
+    assert len(memory_after_first.get("cooccurrence", {})) >= 1
+
+    tasks_round2 = [
+        {
+            "title": "Build compliance validation pipeline",
+            "description": "Validate audit and access logs for security controls.",
+            "depends_on": [],
+        }
+    ]
+    prompts_round2 = [
+        {
+            "task_title": "Build compliance validation pipeline",
+            "coding_prompt": "Implement security compliance checks for audit/access logs.",
+            "test_prompt": "Verify compliance validation behavior.",
+        }
+    ]
+    issues_round2 = [
+        "Missing security audit access log validation tasks"
+    ]
+
+    second = analyze_blocking_issue_coverage(
+        tasks_round2,
+        issues_round2,
+        prompt_pack=prompts_round2,
+        min_evidence_hits=2,
+        min_confidence=0.65,
+        blocking_confidence=0.75,
+        term_cluster_memory=memory_after_first,
+    )
+    memory_after_second = second.get("term_cluster_memory", {})
+    co_first = memory_after_first.get("cooccurrence", {})
+    co_second = memory_after_second.get("cooccurrence", {})
+    assert isinstance(co_second, dict)
+    assert len(co_second) >= len(co_first)
+    assert isinstance(second.get("learned_clusters", {}), dict)
+    # second round should not regress into hard uncovered in this aligned scenario
+    assert second["uncovered"] == []

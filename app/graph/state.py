@@ -13,6 +13,7 @@ class ProjectState(TypedDict, total=False):
     task_breakdown: list[dict[str, Any]]
     prompt_pack: list[dict[str, Any]]
     task_dependency_diagnostics: dict[str, Any]
+    term_cluster_memory: dict[str, Any]
     review_report: dict[str, Any]
     human_feedback_notes: list[Any]
     project_decisions: dict[str, Any]
