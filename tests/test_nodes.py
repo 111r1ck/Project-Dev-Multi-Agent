@@ -1657,6 +1657,64 @@ def test_reviewer_keeps_dependency_timing_blocking_when_build_depends_on_finaliz
     assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
 
 
+def test_reviewer_keeps_dependency_timing_blocking_when_backend_depends_on_frontend_scaffold(monkeypatch):
+    class TimingIssueReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "architecture conflict: backend process task depends on frontend scaffold"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: TimingIssueReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "搭建前端框架与路由配置",
+                "description": "初始化前端应用与路由。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "后端流程引擎集成与配置",
+                "description": "集成后端流程能力并实现业务流程。",
+                "priority": "P0",
+                "depends_on": ["搭建前端框架与路由配置"],
+            },
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "backend process task depends on frontend scaffold" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
 def test_reviewer_node_persists_term_cluster_memory_across_runs(monkeypatch):
     class MemoryLearningReviewerAgent:
         def invoke(self, _payload):

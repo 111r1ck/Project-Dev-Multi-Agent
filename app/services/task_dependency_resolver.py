@@ -238,6 +238,7 @@ def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict
       integration/testing/validation/UAT tasks.
     - Build/design/implementation tasks must not depend on finalization tasks
       (production deploy/go-live/release cutover/UAT sign-off, etc.).
+    - Backend implementation/foundation tasks must not depend on frontend scaffold/routing tasks.
     """
     fixed = [dict(task) for task in tasks]
     by_title = {
@@ -313,6 +314,43 @@ def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict
             ),
         )
 
+    def _is_backend_build_or_foundation(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "后端",
+                "数据库",
+                "中间件",
+                "infra",
+                "backend",
+                "engine",
+                "service",
+                "queue",
+                "broker",
+                "persistence",
+                "api",
+                "schema",
+            ),
+        )
+
+    def _is_frontend_scaffold(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "前端框架",
+                "前端脚手架",
+                "路由配置",
+                "ui框架",
+                "frontend scaffold",
+                "frontend framework",
+                "routing",
+                "router",
+                "web scaffold",
+            ),
+        )
+
     def _is_finalization(task: dict) -> bool:
         text = _task_text(task)
         return _contains_any(
@@ -376,6 +414,29 @@ def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict
                         "from": title,
                         "removed_dep": dep,
                         "reason": "build_or_design_depends_on_finalization",
+                    }
+                )
+                continue
+            if dep not in new_deps:
+                new_deps.append(dep)
+        task["depends_on"] = new_deps
+
+    for task in fixed:
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        if not _is_backend_build_or_foundation(task):
+            continue
+        deps = [str(dep).strip() for dep in (task.get("depends_on", []) or []) if str(dep).strip()]
+        new_deps: list[str] = []
+        for dep in deps:
+            dep_task = by_title.get(dep)
+            if dep_task and _is_frontend_scaffold(dep_task):
+                rewired.append(
+                    {
+                        "from": title,
+                        "removed_dep": dep,
+                        "reason": "backend_build_depends_on_frontend_scaffold",
                     }
                 )
                 continue

@@ -193,3 +193,30 @@ def test_fix_dependency_direction_removes_build_depends_on_finalization():
         item.get("reason") == "build_or_design_depends_on_finalization"
         for item in (diagnostics.get("direction_fixes", []) or [])
     )
+
+
+def test_fix_dependency_direction_removes_backend_infra_depends_on_frontend_scaffold():
+    tasks = [
+        {
+            "title": "搭建前端框架与路由配置",
+            "description": "初始化前端应用与路由。",
+            "priority": "P0",
+            "depends_on": [],
+            "owner_role": "前端开发工程师",
+        },
+        {
+            "title": "后端流程引擎集成与配置",
+            "description": "集成后端流程能力并实现业务流程。",
+            "priority": "P0",
+            "depends_on": ["搭建前端框架与路由配置"],
+            "owner_role": "后端开发工程师",
+        },
+    ]
+
+    fixed, diagnostics = fix_dependency_direction_anti_patterns(tasks)
+    by_title = {item["title"]: item for item in fixed}
+    assert by_title["后端流程引擎集成与配置"]["depends_on"] == []
+    assert any(
+        item.get("reason") == "backend_build_depends_on_frontend_scaffold"
+        for item in (diagnostics.get("direction_fixes", []) or [])
+    )

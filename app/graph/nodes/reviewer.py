@@ -401,6 +401,39 @@ def _has_foundation_reverse_dependency(tasks: list[dict]) -> bool:
         )
         return any(marker.lower() in text for marker in markers)
 
+    def _is_backend_build_or_foundation(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "后端",
+            "数据库",
+            "中间件",
+            "infra",
+            "backend",
+            "engine",
+            "service",
+            "queue",
+            "broker",
+            "persistence",
+            "api",
+            "schema",
+        )
+        return any(marker.lower() in text for marker in markers)
+
+    def _is_frontend_scaffold(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "前端框架",
+            "前端脚手架",
+            "路由配置",
+            "ui框架",
+            "frontend scaffold",
+            "frontend framework",
+            "routing",
+            "router",
+            "web scaffold",
+        )
+        return any(marker.lower() in text for marker in markers)
+
     by_title = {
         str(item.get("title", "")).strip(): item
         for item in (tasks or [])
@@ -409,6 +442,12 @@ def _has_foundation_reverse_dependency(tasks: list[dict]) -> bool:
     for task in (tasks or []):
         if not _is_foundation(task):
             if not _is_build_or_design(task):
+                if not _is_backend_build_or_foundation(task):
+                    continue
+                for dep in (task.get("depends_on", []) or []):
+                    dep_task = by_title.get(str(dep).strip())
+                    if dep_task and _is_frontend_scaffold(dep_task):
+                        return True
                 continue
             for dep in (task.get("depends_on", []) or []):
                 dep_task = by_title.get(str(dep).strip())
