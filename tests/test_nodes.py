@@ -686,6 +686,71 @@ def test_prompt_builder_forces_non_fallback_for_p0_after_retries(monkeypatch):
     assert p2_prompt.get("is_fallback") is True
 
 
+def test_prompt_builder_budget_guard_truncates_and_fills_fallback(monkeypatch):
+    calls = []
+
+    class BudgetedPromptBuilderAgent:
+        def invoke(self, payload):
+            content = payload["messages"][0]["content"]
+            calls.append(content)
+            titles = re.findall(r"^- (.+?) \| priority=", content, flags=re.MULTILINE)
+            return {
+                "structured_response": PromptPackOutput(
+                    prompts=[
+                        PromptTask(
+                            task_title=title,
+                            coding_prompt=f"实现{title}",
+                            test_prompt=f"测试{title}",
+                        )
+                        for title in titles
+                    ]
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.PROMPT_BUILD_MAX_MODEL_CALLS",
+        1,
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.build_prompt_builder_agent",
+        lambda: BudgetedPromptBuilderAgent(),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.load_cached_prompts",
+        lambda _project_id, _review_rounds, tasks: ([None] * len(tasks), list(range(len(tasks)))),
+    )
+    monkeypatch.setattr(
+        "app.graph.nodes.prompt_builder.save_cached_prompts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    tasks = [
+        {
+            "title": f"任务{i}",
+            "description": f"描述{i}",
+            "priority": "P1",
+            "depends_on": [],
+            "owner_role": "后端开发工程师",
+        }
+        for i in range(10)
+    ]
+
+    result = prompt_builder_node(
+        {
+            "task_breakdown": tasks,
+            "review_report": {},
+            "review_rounds": 0,
+        }
+    )
+
+    assert len(calls) == 1
+    diagnostics = result.get("prompt_builder_diagnostics", {})
+    assert diagnostics.get("truncated") is True
+    assert "max_model_calls" in (diagnostics.get("truncated_reasons") or [])
+    assert len(result["prompt_pack"]) == 10
+    assert any(bool(item.get("is_fallback")) for item in result["prompt_pack"])
+
+
 def test_reviewer_gate_blocks_when_blocking_issue_not_covered(monkeypatch):
     fake = FakeReviewerAgent(passed=True)
     monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
@@ -1471,6 +1536,9 @@ def test_reviewer_downgrades_performance_data_sufficiency_issue(monkeypatch):
     ]
     assert matched
     assert any(str(item.get("final_disposition", "")) == "downgraded_to_suggestion" for item in matched)
+    tiers = result["review_report"].get("suggestion_tiers", [])
+    assert isinstance(tiers, list)
+    assert all(isinstance(item, dict) and "tier" in item and "text" in item for item in tiers)
 
 
 def test_reviewer_keeps_dependency_timing_blocking_when_foundation_reverse_dependency(monkeypatch):
@@ -1526,6 +1594,64 @@ def test_reviewer_keeps_dependency_timing_blocking_when_foundation_reverse_depen
         for item in diagnostics
         if isinstance(item, dict)
         and "dependency timing issue" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
+def test_reviewer_keeps_dependency_timing_blocking_when_build_depends_on_finalization(monkeypatch):
+    class TimingIssueReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "dependency timing issue: build task depends on production deployment, execution order is reversed"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: TimingIssueReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "mono", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "生产环境部署与上线",
+                "description": "执行生产发布、切流与上线验收。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "合同全生命周期管理模块开发",
+                "description": "实现合同创建、审批、签署、归档流程。",
+                "priority": "P0",
+                "depends_on": ["生产环境部署与上线"],
+            },
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "build task depends on production deployment" in str(item.get("issue_text", ""))
     ]
     assert matched
     assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)

@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.services.task_dependency_resolver import break_dependency_cycles, resolve_task_dependencies
+from app.services.task_dependency_resolver import (
+    break_dependency_cycles,
+    fix_dependency_direction_anti_patterns,
+    resolve_task_dependencies,
+)
 
 
 def test_resolver_links_alert_work_order_to_alert_generation():
@@ -162,3 +166,30 @@ def test_break_dependency_cycles_removes_cycle_edges():
     assert diagnostics["removed_edges"]
     by_title = {item["title"]: item for item in fixed}
     assert "集成测试与性能压测" not in by_title["集成MinIO对象存储服务"]["depends_on"]
+
+
+def test_fix_dependency_direction_removes_build_depends_on_finalization():
+    tasks = [
+        {
+            "title": "生产环境部署与上线",
+            "description": "执行生产发布、切流与上线验收。",
+            "priority": "P0",
+            "depends_on": [],
+            "owner_role": "DevOps工程师",
+        },
+        {
+            "title": "合同全生命周期管理模块开发",
+            "description": "实现合同创建、审批、签署、归档流程。",
+            "priority": "P0",
+            "depends_on": ["生产环境部署与上线"],
+            "owner_role": "后端开发工程师",
+        },
+    ]
+
+    fixed, diagnostics = fix_dependency_direction_anti_patterns(tasks)
+    by_title = {item["title"]: item for item in fixed}
+    assert by_title["合同全生命周期管理模块开发"]["depends_on"] == []
+    assert any(
+        item.get("reason") == "build_or_design_depends_on_finalization"
+        for item in (diagnostics.get("direction_fixes", []) or [])
+    )

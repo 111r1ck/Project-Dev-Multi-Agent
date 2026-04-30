@@ -201,6 +201,42 @@ def _normalize_review_passed(review_report: dict) -> tuple[dict, bool]:
     return normalized, passed
 
 
+def _classify_suggestion_tier(text: str) -> str:
+    s = str(text or "").lower()
+    must_fix_markers = (
+        "请先补齐",
+        "请补充",
+        "必须",
+        "must",
+        "阻塞",
+        "关键",
+        "缺失",
+        "无法",
+        "cannot",
+        "critical",
+        "blocker",
+        "dependency",
+        "依赖优化",
+        "性能验证",
+        "合规",
+        "审计",
+        "数据丢失",
+    )
+    if any(marker in s for marker in must_fix_markers):
+        return "must_fix"
+    return "nice_to_have"
+
+
+def _build_suggestion_tiers(suggestions: list[str]) -> list[dict]:
+    tiers: list[dict] = []
+    for item in suggestions or []:
+        text = str(item).strip()
+        if not text:
+            continue
+        tiers.append({"text": text, "tier": _classify_suggestion_tier(text)})
+    return tiers
+
+
 def _is_hard_blocking_issue_text(issue: str) -> bool:
     text = str(issue or "").lower()
     markers = (
@@ -318,6 +354,53 @@ def _has_foundation_reverse_dependency(tasks: list[dict]) -> bool:
         )
         return any(marker.lower() in text for marker in markers)
 
+    def _is_finalization(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "生产环境部署",
+            "部署上线",
+            "上线发布",
+            "灰度发布",
+            "全量切流",
+            "切流",
+            "上线检查清单",
+            "验收签字",
+            "uat验收",
+            "生产切换",
+            "变更窗口",
+            "交接",
+            "复盘",
+            "go-live",
+            "release",
+            "rollout",
+            "cutover",
+            "sign-off",
+            "uat",
+            "change window",
+            "production deployment",
+            "production rollout",
+        )
+        return any(marker.lower() in text for marker in markers)
+
+    def _is_build_or_design(task: dict) -> bool:
+        text = _task_text(task)
+        markers = (
+            "设计",
+            "开发",
+            "实现",
+            "建模",
+            "schema",
+            "api",
+            "模块",
+            "design",
+            "develop",
+            "implementation",
+            "implement",
+            "build",
+            "module",
+        )
+        return any(marker.lower() in text for marker in markers)
+
     by_title = {
         str(item.get("title", "")).strip(): item
         for item in (tasks or [])
@@ -325,10 +408,16 @@ def _has_foundation_reverse_dependency(tasks: list[dict]) -> bool:
     }
     for task in (tasks or []):
         if not _is_foundation(task):
+            if not _is_build_or_design(task):
+                continue
+            for dep in (task.get("depends_on", []) or []):
+                dep_task = by_title.get(str(dep).strip())
+                if dep_task and _is_finalization(dep_task):
+                    return True
             continue
         for dep in (task.get("depends_on", []) or []):
             dep_task = by_title.get(str(dep).strip())
-            if dep_task and _is_validation_or_integration(dep_task):
+            if dep_task and (_is_validation_or_integration(dep_task) or _is_finalization(dep_task)):
                 return True
     return False
 
@@ -713,6 +802,7 @@ def _postprocess_review_report_with_evidence(
     suggestions = [str(item) for item in (normalized.get("suggestions", []) or [])]
     if not issues:
         passed = bool(normalized.get("passed"))
+        normalized["suggestion_tiers"] = _build_suggestion_tiers(suggestions)
         return normalized, passed, dict(term_cluster_memory or {})
 
     coverage_analysis = analyze_blocking_issue_coverage(
@@ -1152,6 +1242,7 @@ def _postprocess_review_report_with_evidence(
 
     normalized["issues"] = kept_issues
     normalized["suggestions"] = suggestions
+    normalized["suggestion_tiers"] = _build_suggestion_tiers(suggestions)
     enriched_diagnostics: list[dict] = []
     for item in diagnostics:
         if not isinstance(item, dict):
@@ -1223,10 +1314,12 @@ def _build_assumption_pack_review(assumption_pack: dict, tasks: list[dict]) -> d
 
     if not issues:
         return None
+    suggestions_out = suggestions or ["请补齐假设验证、风险控制与上线前确认任务。"]
     return {
         "passed": False,
         "issues": ["受控假设审核未通过："] + issues,
-        "suggestions": suggestions or ["请补齐假设验证、风险控制与上线前确认任务。"],
+        "suggestions": suggestions_out,
+        "suggestion_tiers": _build_suggestion_tiers(suggestions_out),
     }
 
 

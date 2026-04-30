@@ -12,6 +12,7 @@ class ProjectState(TypedDict, total=False):
     architecture_plan: dict[str, Any]
     task_breakdown: list[dict[str, Any]]
     prompt_pack: list[dict[str, Any]]
+    prompt_builder_diagnostics: dict[str, Any]
     task_dependency_diagnostics: dict[str, Any]
     term_cluster_memory: dict[str, Any]
     review_report: dict[str, Any]

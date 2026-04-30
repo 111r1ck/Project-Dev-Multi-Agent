@@ -189,3 +189,59 @@ def test_prompt_builder_rework_regenerates_focus_tasks_and_reuses_previous_cache
     assert prompt_pack[2]["coding_prompt"] == "old-cp-3"
     assert prompt_pack[1].get("is_fallback") is not True
     assert prompt_pack[2].get("is_fallback") is not True
+
+
+def test_planner_rework_only_consumes_must_fix_suggestions(monkeypatch):
+    class MinimalPlannerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": PlannerOutput(
+                    milestones=["M1"],
+                    tasks=[
+                        TaskItem(
+                            title="基础任务",
+                            description="初始化",
+                            priority="P1",
+                            depends_on=[],
+                            owner_role="后端",
+                        )
+                    ],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: MinimalPlannerAgent(),
+    )
+
+    state = {
+        "requirement_doc": {"summary": "s", "constraints": []},
+        "feasibility_report": {"complexity": "M", "risks": []},
+        "architecture_plan": {
+            "architecture_style": "mono",
+            "backend": ["python"],
+            "frontend": ["vue"],
+            "modules": [],
+        },
+        "review_rounds": 1,
+        "review_report": {
+            "passed": False,
+            "issues": [],
+            "suggestions": [
+                "请补充风控校验任务",
+                "建议补充部署文档",
+            ],
+            "suggestion_tiers": [
+                {"text": "请补充风控校验任务", "tier": "must_fix"},
+                {"text": "建议补充部署文档", "tier": "nice_to_have"},
+            ],
+        },
+        "task_breakdown": [],
+        "project_decisions": {},
+        "assumption_pack": {},
+    }
+
+    result = planner_node(state)
+    titles = [str(item.get("title", "")) for item in result["task_breakdown"]]
+    assert any("风控校验任务" in title for title in titles)
+    assert not any("部署文档" in title for title in titles)

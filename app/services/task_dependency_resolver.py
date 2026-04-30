@@ -233,9 +233,11 @@ def break_dependency_cycles(tasks: list[dict]) -> tuple[list[dict], dict]:
 def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict], dict]:
     """
     Fix common direction anti-patterns in dependencies.
-    Generic rule:
+    Generic rules:
     - Foundation tasks (schema/infra/bootstrap/model) must not depend on
       integration/testing/validation/UAT tasks.
+    - Build/design/implementation tasks must not depend on finalization tasks
+      (production deploy/go-live/release cutover/UAT sign-off, etc.).
     """
     fixed = [dict(task) for task in tasks]
     by_title = {
@@ -290,6 +292,57 @@ def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict
             ),
         )
 
+    def _is_build_or_design(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "设计",
+                "开发",
+                "实现",
+                "建模",
+                "schema",
+                "api",
+                "模块",
+                "design",
+                "develop",
+                "implementation",
+                "implement",
+                "build",
+                "module",
+            ),
+        )
+
+    def _is_finalization(task: dict) -> bool:
+        text = _task_text(task)
+        return _contains_any(
+            text,
+            (
+                "生产环境部署",
+                "部署上线",
+                "上线发布",
+                "灰度发布",
+                "全量切流",
+                "切流",
+                "上线检查清单",
+                "验收签字",
+                "uat验收",
+                "生产切换",
+                "变更窗口",
+                "交接",
+                "复盘",
+                "go-live",
+                "release",
+                "rollout",
+                "cutover",
+                "sign-off",
+                "uat",
+                "change window",
+                "production deployment",
+                "production rollout",
+            ),
+        )
+
     for task in fixed:
         title = str(task.get("title", "")).strip()
         if not title:
@@ -302,6 +355,29 @@ def fix_dependency_direction_anti_patterns(tasks: list[dict]) -> tuple[list[dict
             dep_task = by_title.get(dep)
             if dep_task and _is_validation_or_integration(dep_task):
                 rewired.append({"from": title, "removed_dep": dep, "reason": "foundation_depends_on_validation"})
+                continue
+            if dep not in new_deps:
+                new_deps.append(dep)
+        task["depends_on"] = new_deps
+
+    for task in fixed:
+        title = str(task.get("title", "")).strip()
+        if not title:
+            continue
+        if not _is_build_or_design(task):
+            continue
+        deps = [str(dep).strip() for dep in (task.get("depends_on", []) or []) if str(dep).strip()]
+        new_deps: list[str] = []
+        for dep in deps:
+            dep_task = by_title.get(dep)
+            if dep_task and _is_finalization(dep_task):
+                rewired.append(
+                    {
+                        "from": title,
+                        "removed_dep": dep,
+                        "reason": "build_or_design_depends_on_finalization",
+                    }
+                )
                 continue
             if dep not in new_deps:
                 new_deps.append(dep)

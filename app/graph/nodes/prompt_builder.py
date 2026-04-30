@@ -1,4 +1,5 @@
 import re
+import time
 
 from app.agents.prompt_builder_agent import build_prompt_builder_agent
 from app.graph.nodes.common import (
@@ -14,6 +15,8 @@ PROMPT_BUILD_BATCH_SIZE = 8
 PROMPT_BUILD_MAX_TOTAL = 14
 PROMPT_BUILD_MAX_P2 = 2
 P0_PROMPT_RETRY_MAX_ATTEMPTS = 2
+PROMPT_BUILD_MAX_MODEL_CALLS = 6
+PROMPT_BUILD_MAX_SECONDS = 45
 
 
 def _build_fallback_prompt(task: dict) -> dict:
@@ -195,6 +198,10 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
     review_report = state.get("review_report", {}) or {}
     is_rework_round = review_rounds > 0 and not bool(review_report.get("passed"))
     focus_indices = _extract_review_focus_indices(all_tasks, review_report)
+    started_at = time.monotonic()
+    model_calls = 0
+    truncated = False
+    truncated_reasons: list[str] = []
 
     prompt_slots, missing_indices = load_cached_prompts(project_id, review_rounds, all_tasks)
     if is_rework_round and review_rounds > 0:
@@ -217,15 +224,34 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
     else:
         agent = None
 
+    def _budget_exhausted() -> bool:
+        nonlocal truncated
+        if model_calls >= PROMPT_BUILD_MAX_MODEL_CALLS:
+            truncated = True
+            if "max_model_calls" not in truncated_reasons:
+                truncated_reasons.append("max_model_calls")
+            return True
+        elapsed = time.monotonic() - started_at
+        if elapsed >= PROMPT_BUILD_MAX_SECONDS:
+            truncated = True
+            if "max_seconds" not in truncated_reasons:
+                truncated_reasons.append("max_seconds")
+            return True
+        return False
+
     def _generate_indices(indices: list[int], *, p0_retry_mode: bool = False) -> None:
-        nonlocal agent
+        nonlocal agent, model_calls
         if not indices:
+            return
+        if _budget_exhausted():
             return
         if agent is None:
             agent = build_prompt_builder_agent()
         assert agent is not None
 
         for batch_start in range(0, len(indices), PROMPT_BUILD_BATCH_SIZE):
+            if _budget_exhausted():
+                break
             batch_indices = indices[batch_start : batch_start + PROMPT_BUILD_BATCH_SIZE]
             missing_tasks = [all_tasks[i] for i in batch_indices]
             task_summary = summarize_task_breakdown(
@@ -268,6 +294,7 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
                     ]
                 }
             )
+            model_calls += 1
             structured = extract_structured_response(result)
             generated_prompt_pack = [item.model_dump() for item in structured.prompts]
             aligned_generated = _align_prompt_pack_to_tasks(missing_tasks, generated_prompt_pack)
@@ -290,7 +317,7 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
         )
     ]
     retry_attempt = 0
-    while p0_retry_indices and retry_attempt < P0_PROMPT_RETRY_MAX_ATTEMPTS:
+    while p0_retry_indices and retry_attempt < P0_PROMPT_RETRY_MAX_ATTEMPTS and not _budget_exhausted():
         _generate_indices(p0_retry_indices, p0_retry_mode=True)
         p0_retry_indices = [
             idx
@@ -322,5 +349,16 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
     return {
         **state,
         "prompt_pack": prompt_pack,
+        "prompt_builder_diagnostics": {
+            "model_calls": model_calls,
+            "max_model_calls": PROMPT_BUILD_MAX_MODEL_CALLS,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "max_seconds": PROMPT_BUILD_MAX_SECONDS,
+            "truncated": truncated,
+            "truncated_reasons": truncated_reasons,
+            "total_tasks": len(all_tasks),
+            "generated_tasks": sum(1 for item in prompt_pack if not bool(item.get("is_fallback", False))),
+            "fallback_tasks": sum(1 for item in prompt_pack if bool(item.get("is_fallback", False))),
+        },
         "next_step": "reviewer",
     }

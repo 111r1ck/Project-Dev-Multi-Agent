@@ -32,10 +32,7 @@ def _extract_missing_task_candidates(review_report: dict) -> list[tuple[str, str
     Extract candidate missing task titles from reviewer issues/suggestions.
     This keeps the mechanism domain-agnostic and driven by current review feedback.
     """
-    texts = []
-    if isinstance(review_report, dict):
-        texts.extend(review_report.get("issues", []) or [])
-        texts.extend(review_report.get("suggestions", []) or [])
+    texts = _get_rework_feedback_texts(review_report)
 
     candidates: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -64,6 +61,26 @@ def _extract_missing_task_candidates(review_report: dict) -> list[tuple[str, str
                 seen.add(title)
                 candidates.append((title, text))
     return candidates
+
+
+def _get_rework_feedback_texts(review_report: dict) -> list[str]:
+    if not isinstance(review_report, dict):
+        return []
+    texts: list[str] = []
+    texts.extend(str(item) for item in (review_report.get("issues", []) or []))
+    suggestion_tiers = review_report.get("suggestion_tiers", [])
+    if isinstance(suggestion_tiers, list) and suggestion_tiers:
+        for item in suggestion_tiers:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("tier", "")).strip() != "must_fix":
+                continue
+            text = str(item.get("text", "")).strip()
+            if text:
+                texts.append(text)
+    else:
+        texts.extend(str(item) for item in (review_report.get("suggestions", []) or []))
+    return texts
 
 
 def _infer_priority_from_text(text: str, default: str = "P1") -> str:
@@ -139,9 +156,7 @@ def _apply_review_task_updates(tasks: list[dict], review_report: dict) -> list[d
     if not isinstance(review_report, dict):
         return tasks
 
-    texts: list[str] = []
-    texts.extend([str(item) for item in (review_report.get("issues", []) or [])])
-    texts.extend([str(item) for item in (review_report.get("suggestions", []) or [])])
+    texts = _get_rework_feedback_texts(review_report)
     if not texts:
         return tasks
 
@@ -185,10 +200,10 @@ def _priority_rank(priority: str) -> int:
 def _task_budget_from_complexity(complexity: str) -> int:
     normalized = str(complexity or "").strip().lower()
     if normalized in {"low", "simple", "s", "小", "低"}:
-        return 12
+        return 10
     if normalized in {"high", "复杂", "高", "h"}:
-        return 24
-    return 18
+        return 16
+    return 14
 
 
 def _extract_blocking_terms(review_report: dict, limit: int = 8) -> set[str]:
@@ -211,8 +226,9 @@ def _trim_tasks_by_budget(
     *,
     budget: int,
     blocking_terms: set[str],
+    max_low_priority: int = 1,
 ) -> list[dict]:
-    if budget <= 0 or len(tasks) <= budget:
+    if budget <= 0:
         return list(tasks)
 
     normalized = [dict(task) for task in tasks]
@@ -248,28 +264,54 @@ def _trim_tasks_by_budget(
         if blocking_terms and any(term in text for term in blocking_terms):
             must_keep_indices.add(idx)
 
-    sorted_indices = sorted(
-        range(len(normalized)),
-        key=lambda i: (
-            0 if i in anchor_indices else 1,
-            _priority_rank(str(normalized[i].get("priority", ""))),
-            i,
-        ),
-    )
-    effective_budget = max(int(budget), len(must_keep_indices))
-    selected_indices: list[int] = []
-    for idx in sorted_indices:
-        if idx in must_keep_indices:
+    if len(normalized) <= int(budget):
+        selected_indices = list(range(len(normalized)))
+    else:
+        sorted_indices = sorted(
+            range(len(normalized)),
+            key=lambda i: (
+                0 if i in anchor_indices else 1,
+                _priority_rank(str(normalized[i].get("priority", ""))),
+                i,
+            ),
+        )
+        effective_budget = max(int(budget), len(must_keep_indices))
+        selected_indices: list[int] = []
+        for idx in sorted_indices:
+            if idx in must_keep_indices:
+                selected_indices.append(idx)
+        for idx in sorted_indices:
+            if idx in selected_indices:
+                continue
             selected_indices.append(idx)
-    for idx in sorted_indices:
-        if idx in selected_indices:
-            continue
-        selected_indices.append(idx)
-        if len(selected_indices) >= effective_budget:
-            break
+            if len(selected_indices) >= effective_budget:
+                break
 
-    selected_indices = selected_indices[:effective_budget]
+        selected_indices = selected_indices[:effective_budget]
     selected = [normalized[idx] for idx in sorted(selected_indices)]
+
+    # Phase-2 budget tightening:
+    # defer most P2/P3 tasks unless they are must-keep.
+    if max_low_priority >= 0:
+        low_priority_kept = 0
+        filtered_selected: list[dict] = []
+        for task in selected:
+            title = str(task.get("title", "")).strip()
+            rank = _priority_rank(str(task.get("priority", "")))
+            text = _task_text(task)
+            is_must_keep = (
+                title in assumption_anchor_titles
+                or "基于评审回流补齐" in str(task.get("description", ""))
+                or rank == 0
+                or (blocking_terms and any(term in text for term in blocking_terms))
+            )
+            if rank >= 2 and not is_must_keep:
+                if low_priority_kept >= max_low_priority:
+                    continue
+                low_priority_kept += 1
+            filtered_selected.append(task)
+        selected = filtered_selected
+
     selected_titles = {
         str(item.get("title", "")).strip() for item in selected if str(item.get("title", "")).strip()
     }
@@ -369,6 +411,7 @@ def planner_node(state: ProjectState) -> ProjectState:
         tasks,
         budget=budget,
         blocking_terms=_extract_blocking_terms(review_report),
+        max_low_priority=1,
     )
 
     return {

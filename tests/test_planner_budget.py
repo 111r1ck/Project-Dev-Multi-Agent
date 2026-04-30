@@ -21,6 +21,37 @@ class FakeManyTasksPlannerAgent:
         return {"structured_response": PlannerOutput(tasks=tasks)}
 
 
+class FakeMixedPriorityPlannerAgent:
+    def invoke(self, _payload):
+        tasks = [
+            TaskItem(
+                title="P0主链路任务",
+                description="关键链路",
+                priority="P0",
+                depends_on=[],
+                owner_role="后端",
+            ),
+            TaskItem(
+                title="P1实现任务",
+                description="常规实现",
+                priority="P1",
+                depends_on=[],
+                owner_role="后端",
+            ),
+        ]
+        for idx in range(1, 8):
+            tasks.append(
+                TaskItem(
+                    title=f"P2优化任务{idx}",
+                    description="可后置优化",
+                    priority="P2",
+                    depends_on=[],
+                    owner_role="后端",
+                )
+            )
+        return {"structured_response": PlannerOutput(tasks=tasks)}
+
+
 def _base_state() -> dict:
     return {
         "requirement_doc": {"summary": "simple", "constraints": []},
@@ -69,3 +100,18 @@ def test_planner_rework_round_should_not_grow_task_count(monkeypatch):
 
     result = planner_node(state)
     assert len(result["task_breakdown"]) <= 8
+
+
+def test_planner_defers_most_low_priority_tasks(monkeypatch):
+    monkeypatch.setattr(
+        "app.graph.nodes.planner.build_planner_agent",
+        lambda: FakeMixedPriorityPlannerAgent(),
+    )
+    state = _base_state()
+    state["review_rounds"] = 0
+
+    result = planner_node(state)
+    low_priority = [
+        item for item in result["task_breakdown"] if str(item.get("priority", "")).upper() in {"P2", "P3"}
+    ]
+    assert len(low_priority) <= 1
