@@ -14,6 +14,7 @@ from app.graph.nodes.common import (
     summarize_task_breakdown,
 )
 from app.graph.state import ProjectState
+from app.services.architecture_conflict_checker import check_architecture_conflict
 from app.services.reviewer_cache import load_cached_review, save_cached_review
 
 
@@ -309,6 +310,12 @@ def _is_dependency_timing_issue_text(issue: str) -> bool:
         "preflight",
         "prerequisite",
     )
+    return any(marker in text for marker in markers)
+
+
+def _is_architecture_conflict_issue_text(issue: str) -> bool:
+    text = str(issue or "").lower()
+    markers = ("架构冲突", "architecture conflict", "architecture mismatch")
     return any(marker in text for marker in markers)
 
 
@@ -835,6 +842,7 @@ def _postprocess_review_report_with_evidence(
     prompts: list[dict],
     review_report: dict,
     term_cluster_memory: dict | None = None,
+    architecture_plan: dict | None = None,
 ) -> tuple[dict, bool, dict]:
     normalized = dict(review_report or {})
     issues = [str(item) for item in (normalized.get("issues", []) or [])]
@@ -863,6 +871,7 @@ def _postprocess_review_report_with_evidence(
     }
     dependency_check = detect_dependency_cycles(tasks)
     post_diagnostics: list[dict] = []
+    suppressed_diagnostics: list[dict] = []
     diag_by_issue = {
         str(item.get("issue_text", "")): item for item in diagnostics if isinstance(item, dict)
     }
@@ -902,6 +911,60 @@ def _postprocess_review_report_with_evidence(
         )
 
     for issue in issues:
+        if _is_architecture_conflict_issue_text(issue):
+            arch_check = check_architecture_conflict(
+                issue_text=issue,
+                architecture_plan=architecture_plan or {},
+                tasks=tasks,
+            )
+            if arch_check.get("is_architecture_conflict_issue") and bool(arch_check.get("has_hard_evidence")):
+                kept_issues.append(issue)
+                _set_issue_outcome(
+                    issue,
+                    "kept_blocking",
+                    str(arch_check.get("decision", "architecture_conflict_hard_evidence")),
+                    "architecture_conflict_with_hard_evidence",
+                )
+                post_diagnostics.append(
+                    {
+                        "issue_text": issue,
+                        "issue_type": "architecture_conflict",
+                        "decision": "blocking_architecture_conflict",
+                        "postprocess_action": "blocking_architecture_conflict",
+                        "final_disposition": "kept_blocking",
+                        "postprocess_reason_code": str(arch_check.get("decision", "architecture_conflict_hard_evidence")),
+                        "postprocess_reason_text": "architecture_conflict_with_hard_evidence",
+                        "checker_conflict_type": arch_check.get("conflict_type"),
+                        "checker_has_hard_evidence": arch_check.get("has_hard_evidence"),
+                        "checker_evidence_list": arch_check.get("evidence_list", []),
+                    }
+                )
+                continue
+            if arch_check.get("is_architecture_conflict_issue") and not arch_check.get("has_hard_evidence"):
+                downgraded_issues.append(issue)
+                explicit_downgraded.add(issue)
+                _set_issue_outcome(
+                    issue,
+                    "downgraded_to_suggestion",
+                    "architecture_conflict_no_hard_evidence",
+                    "architecture_conflict_requires_hard_microservice_signals",
+                )
+                post_diagnostics.append(
+                    {
+                        "issue_text": issue,
+                        "issue_type": "architecture_conflict",
+                        "decision": "downgraded_architecture_conflict",
+                        "postprocess_action": "downgraded_architecture_conflict",
+                        "final_disposition": "downgraded_to_suggestion",
+                        "postprocess_reason_code": "architecture_conflict_no_hard_evidence",
+                        "postprocess_reason_text": "architecture_conflict_requires_hard_microservice_signals",
+                        "checker_conflict_type": arch_check.get("conflict_type"),
+                        "checker_has_hard_evidence": arch_check.get("has_hard_evidence"),
+                        "checker_evidence_list": arch_check.get("evidence_list", []),
+                    }
+                )
+                continue
+
         if _issue_is_research_timing_dispute(issue, tasks):
             downgraded_issues.append(issue)
             explicit_downgraded.add(issue)
@@ -1296,9 +1359,25 @@ def _postprocess_review_report_with_evidence(
         enriched["final_disposition"] = outcome.get("final_disposition", "unknown")
         enriched["postprocess_reason_code"] = outcome.get("postprocess_reason_code", "none")
         enriched["postprocess_reason_text"] = outcome.get("postprocess_reason_text", "none")
+        issue_text = str(enriched.get("issue_text", ""))
+        issue_type = str(enriched.get("issue_type", ""))
+        is_cycle_like = _is_dependency_cycle_issue_text(issue_text) or issue_type == "dependency_cycle"
+        if is_cycle_like and not dependency_check.get("has_cycle"):
+            enriched["suppressed"] = True
+            enriched["suppressed_reason"] = "cycle_diagnostic_requires_structural_cycle"
+            suppressed_diagnostics.append(enriched)
+            continue
+        if str(enriched.get("final_disposition", "")) == "dropped_as_covered":
+            enriched["suppressed"] = True
+            enriched["suppressed_reason"] = "dropped_as_covered"
+            suppressed_diagnostics.append(enriched)
+            continue
         enriched_diagnostics.append(enriched)
 
     normalized["diagnostics"] = enriched_diagnostics + post_diagnostics
+    normalized["suppressed_diagnostics"] = suppressed_diagnostics
+    normalized["review_diagnostics_count"] = len(normalized["diagnostics"])
+    normalized["suppressed_diagnostics_count"] = len(suppressed_diagnostics)
     if consistency_errors:
         normalized["consistency_errors"] = consistency_errors
 
@@ -1563,6 +1642,7 @@ def reviewer_node(state: ProjectState) -> ProjectState:
             prompts=prompts,
             review_report=cached_review,
             term_cluster_memory=term_cluster_memory,
+            architecture_plan=arch,
         )
         cached_review, passed = _normalize_review_passed(cached_review)
         updated_state = {**state, "term_cluster_memory": term_cluster_memory}
@@ -1612,6 +1692,7 @@ def reviewer_node(state: ProjectState) -> ProjectState:
         prompts=prompts,
         review_report=structured.model_dump(),
         term_cluster_memory=term_cluster_memory,
+        architecture_plan=arch,
     )
     review_report, passed = _normalize_review_passed(review_report)
     save_cached_review(project_id, cache_payload, review_report)

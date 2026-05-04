@@ -1715,6 +1715,202 @@ def test_reviewer_keeps_dependency_timing_blocking_when_backend_depends_on_front
     assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
 
 
+def test_reviewer_downgrades_architecture_conflict_without_hard_microservice_evidence(monkeypatch):
+    class ArchConflictReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=[
+                        "【架构冲突】架构风格标注为模块化单体，但任务拆解看起来像微服务拆分。"
+                    ],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: ArchConflictReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "模块化单体 + 前后端分离", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {
+                "title": "后端模块化单体框架搭建",
+                "description": "定义模块边界与依赖关系。",
+                "priority": "P0",
+                "depends_on": [],
+            },
+            {
+                "title": "后端公共组件开发",
+                "description": "开发统一异常处理与组件能力。",
+                "priority": "P0",
+                "depends_on": ["后端模块化单体框架搭建"],
+            },
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is True
+    assert result["review_report"]["issues"] == []
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "架构冲突" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "downgraded_to_suggestion" for item in matched)
+
+
+def test_reviewer_keeps_blocking_for_data_boundary_conflict_missing_implementation(monkeypatch):
+    class DataBoundaryConflictReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=["【架构冲突】多租户与数据主权要求未见隔离实现任务。"],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: DataBoundaryConflictReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "模块化单体", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "后端框架搭建", "description": "初始化后端工程", "priority": "P0", "depends_on": []},
+            {"title": "订单模块开发", "description": "实现订单CRUD", "priority": "P0", "depends_on": []},
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "多租户与数据主权要求未见隔离实现任务" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
+def test_reviewer_keeps_blocking_for_sync_async_mismatch_conflict(monkeypatch):
+    class SyncAsyncConflictReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=["【架构冲突】需要异步事件驱动链路，但当前任务仅定义同步直连接口。"],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: SyncAsyncConflictReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "模块化单体", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "审批同步接口开发", "description": "基于request-response直连处理审批链路", "priority": "P0", "depends_on": []},
+            {"title": "预算同步校验接口", "description": "同步实时接口校验预算", "priority": "P0", "depends_on": []},
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "需要异步事件驱动链路" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
+def test_reviewer_keeps_blocking_for_state_model_conflict_missing_implementation(monkeypatch):
+    class StateModelConflictReviewerAgent:
+        def invoke(self, _payload):
+            return {
+                "structured_response": ReviewReport(
+                    passed=False,
+                    issues=["【架构冲突】状态机与幂等控制要求未落地，当前仅直接更新状态字段。"],
+                    suggestions=[],
+                )
+            }
+
+    monkeypatch.setattr(
+        "app.graph.nodes.reviewer.build_reviewer_agent",
+        lambda: StateModelConflictReviewerAgent(),
+    )
+    monkeypatch.setattr("app.graph.nodes.reviewer.load_cached_review", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.graph.nodes.reviewer.save_cached_review", lambda *_args, **_kwargs: None)
+    state = {
+        "requirement_doc": {"summary": "demo", "constraints": []},
+        "feasibility_report": {"feasible": True, "complexity": "M", "risks": []},
+        "architecture_plan": {"architecture_style": "模块化单体", "backend": [], "frontend": []},
+        "task_breakdown": [
+            {"title": "订单状态直接更新接口", "description": "直接更新订单状态并同步写入，不加锁", "priority": "P0", "depends_on": []},
+            {"title": "审批结果直接覆盖", "description": "直接覆盖审批状态字段", "priority": "P0", "depends_on": []},
+        ],
+        "prompt_pack": [],
+        "review_report": {},
+        "review_rounds": 0,
+        "max_review_rounds": 2,
+        "errors": [],
+    }
+
+    result = reviewer_node(state)
+    assert result["review_report"]["passed"] is False
+    assert result["review_report"]["issues"]
+    diagnostics = result["review_report"].get("diagnostics", [])
+    matched = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict)
+        and "状态机与幂等控制要求未落地" in str(item.get("issue_text", ""))
+    ]
+    assert matched
+    assert any(str(item.get("final_disposition", "")) == "kept_blocking" for item in matched)
+
+
 def test_reviewer_node_persists_term_cluster_memory_across_runs(monkeypatch):
     class MemoryLearningReviewerAgent:
         def invoke(self, _payload):
