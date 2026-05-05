@@ -852,13 +852,10 @@ def _postprocess_review_report_with_evidence(
         normalized["suggestion_tiers"] = _build_suggestion_tiers(suggestions)
         return normalized, passed, dict(term_cluster_memory or {})
 
-    coverage_analysis = analyze_blocking_issue_coverage(
-        tasks,
-        issues,
+    coverage_analysis = _analyze_blocking_issue_coverage_two_layer(
+        tasks=tasks,
+        issues=issues,
         prompt_pack=prompts,
-        min_evidence_hits=settings.coverage_min_evidence_hits,
-        min_confidence=settings.coverage_min_confidence,
-        blocking_confidence=settings.coverage_blocking_confidence,
         term_cluster_memory=term_cluster_memory,
     )
     uncovered = [str(item) for item in (coverage_analysis.get("uncovered", []) or [])]
@@ -1520,6 +1517,132 @@ def _build_reviewer_cache_payload(
     }
 
 
+def _compact_tasks_for_evidence(tasks: list[dict]) -> list[dict]:
+    compacted: list[dict] = []
+    for item in tasks or []:
+        compacted.append(
+            {
+                "title": str(item.get("title", "")).strip(),
+                "description": str(item.get("description", "")).strip()[:220],
+                "priority": str(item.get("priority", "")).strip(),
+                "depends_on": [str(dep).strip() for dep in (item.get("depends_on", []) or [])][:6],
+                "owner_role": str(item.get("owner_role", "")).strip(),
+            }
+        )
+    return compacted
+
+
+def _compact_prompts_for_evidence(prompts: list[dict]) -> list[dict]:
+    compacted: list[dict] = []
+    for item in prompts or []:
+        compacted.append(
+            {
+                "task_title": str(item.get("task_title", "")).strip(),
+                "coding_prompt": str(item.get("coding_prompt", "")).strip()[:220],
+                "test_prompt": str(item.get("test_prompt", "")).strip()[:220],
+                "is_fallback": bool(item.get("is_fallback")),
+            }
+        )
+    return compacted
+
+
+def _tag_layer_diagnostics(
+    diagnostics: list[dict],
+    *,
+    layer: str,
+    stage: str,
+) -> list[dict]:
+    tagged: list[dict] = []
+    for item in diagnostics or []:
+        if not isinstance(item, dict):
+            tagged.append(item)
+            continue
+        payload = dict(item)
+        payload["evidence_layer"] = layer
+        payload["evidence_stage"] = stage
+        tagged.append(payload)
+    return tagged
+
+
+def _analyze_blocking_issue_coverage_two_layer(
+    *,
+    tasks: list[dict],
+    issues: list[str],
+    prompt_pack: list[dict],
+    term_cluster_memory: dict | None,
+) -> dict:
+    """
+    Two-layer evidence:
+    1) compact layer for low-token coarse screening
+    2) full layer recheck only for compact-layer uncovered issues
+    """
+    compact_tasks = _compact_tasks_for_evidence(tasks)
+    compact_prompts = _compact_prompts_for_evidence(prompt_pack)
+
+    compact_result = analyze_blocking_issue_coverage(
+        compact_tasks,
+        issues,
+        prompt_pack=compact_prompts,
+        min_evidence_hits=settings.coverage_min_evidence_hits,
+        min_confidence=settings.coverage_min_confidence,
+        blocking_confidence=settings.coverage_blocking_confidence,
+        term_cluster_memory=term_cluster_memory,
+    )
+    compact_uncovered = [str(item) for item in (compact_result.get("uncovered", []) or [])]
+    compact_downgraded = [str(item) for item in (compact_result.get("downgraded", []) or [])]
+    compact_diags = _tag_layer_diagnostics(
+        compact_result.get("diagnostics", []) or [],
+        layer="compact",
+        stage="coarse_screen",
+    )
+    next_memory = dict(compact_result.get("term_cluster_memory", {}) or term_cluster_memory or {})
+
+    if not compact_uncovered:
+        return {
+            "uncovered": [],
+            "downgraded": compact_downgraded,
+            "diagnostics": compact_diags,
+            "term_cluster_memory": next_memory,
+            "coverage_layers": {
+                "compact_issues": len(issues or []),
+                "compact_uncovered": 0,
+                "full_recheck_issues": 0,
+            },
+        }
+
+    full_result = analyze_blocking_issue_coverage(
+        tasks,
+        compact_uncovered,
+        prompt_pack=prompt_pack,
+        min_evidence_hits=settings.coverage_min_evidence_hits,
+        min_confidence=settings.coverage_min_confidence,
+        blocking_confidence=settings.coverage_blocking_confidence,
+        term_cluster_memory=next_memory,
+    )
+    full_uncovered = [str(item) for item in (full_result.get("uncovered", []) or [])]
+    full_downgraded = [str(item) for item in (full_result.get("downgraded", []) or [])]
+    full_diags = _tag_layer_diagnostics(
+        full_result.get("diagnostics", []) or [],
+        layer="full",
+        stage="evidence_recheck",
+    )
+    merged_downgraded = list(dict.fromkeys(compact_downgraded + full_downgraded))
+    merged_diags = compact_diags + full_diags
+    final_memory = dict(full_result.get("term_cluster_memory", {}) or next_memory)
+    return {
+        "uncovered": full_uncovered,
+        "downgraded": merged_downgraded,
+        "diagnostics": merged_diags,
+        "term_cluster_memory": final_memory,
+        "coverage_layers": {
+            "compact_issues": len(issues or []),
+            "compact_uncovered": len(compact_uncovered),
+            "full_recheck_issues": len(compact_uncovered),
+            "final_uncovered": len(full_uncovered),
+        },
+    }
+
+
 def reviewer_node(state: ProjectState) -> ProjectState:
     req = state["requirement_doc"]
     fea = state["feasibility_report"]
@@ -1557,13 +1680,10 @@ def reviewer_node(state: ProjectState) -> ProjectState:
 
     if is_rework_round:
         blocking_issues = extract_blocking_issues(previous_review, max_items=8)
-        coverage_analysis = analyze_blocking_issue_coverage(
-            tasks,
-            blocking_issues,
+        coverage_analysis = _analyze_blocking_issue_coverage_two_layer(
+            tasks=tasks,
+            issues=blocking_issues,
             prompt_pack=prompts,
-            min_evidence_hits=settings.coverage_min_evidence_hits,
-            min_confidence=settings.coverage_min_confidence,
-            blocking_confidence=settings.coverage_blocking_confidence,
             term_cluster_memory=term_cluster_memory,
         )
         term_cluster_memory = dict(coverage_analysis.get("term_cluster_memory", {}) or term_cluster_memory)
