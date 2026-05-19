@@ -120,6 +120,33 @@ curl http://127.0.0.1:8000/runs/mall-001/state
 curl "http://127.0.0.1:8000/runs/mall-001/history?limit=20"
 ```
 
+## Codex MCP 接入（导出工具）
+
+如需让 Codex 通过 MCP 直接调用本项目导出能力：
+
+1. 安装 MCP 依赖
+
+```bash
+pip install -e .[mcp]
+```
+
+2. 启动 MCP server（stdio）
+
+```bash
+codex-export-mcp
+```
+
+3. 可用工具
+
+- `list_export_capabilities`
+- `get_run_state_summary(project_id)`
+- `export_run_artifact_tool(project_id, export_format, sections)`
+
+说明：
+
+- 该 MCP server 复用现有导出服务，文件写入 `exports/{project_id}/`。
+- 保持与 HTTP 导出接口并行，不破坏现有前端与 API 调用链路。
+
 ## 项目结构
 
 - `app/agents`: 每个专业 Agent 与 schema

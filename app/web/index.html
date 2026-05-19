@@ -545,6 +545,7 @@
       <div class="nav-section">
         <div id="navWorkflow" class="nav-item active">工作台 / Runs</div>
         <div id="navAgentEditor" class="nav-item">编辑 Agent</div>
+        <div id="navExportCenter" class="nav-item">导出中心</div>
         <div class="nav-item">State / History</div>
         <div class="nav-item">Human Gate</div>
         <div class="nav-item">Checkpoints</div>
@@ -625,6 +626,50 @@
           </details>
         </section>
       </section>
+      </section>
+
+      <section id="exportCenterView" class="view-pane hidden">
+        <section class="grid">
+          <article class="card panel-run">
+            <h3><span class="idx">01</span>导出配置</h3>
+            <div class="row">
+              <div>
+                <label>Project ID</label>
+                <input id="exportProjectId" placeholder="留空时使用工作台中的 Project ID" />
+              </div>
+              <div>
+                <label>导出格式</label>
+                <select id="exportFormat">
+                  <option value="json">json</option>
+                  <option value="md">md</option>
+                  <option value="csv">csv</option>
+                </select>
+              </div>
+              <div>
+                <label>导出分段</label>
+                <div class="hint">
+                  <label><input type="checkbox" class="export-section" value="summary" checked /> summary</label>
+                  <label><input type="checkbox" class="export-section" value="requirement_doc" checked /> requirement_doc</label>
+                  <label><input type="checkbox" class="export-section" value="feasibility_report" checked /> feasibility_report</label>
+                  <label><input type="checkbox" class="export-section" value="architecture_plan" checked /> architecture_plan</label>
+                  <label><input type="checkbox" class="export-section" value="tasks" checked /> tasks</label>
+                  <label><input type="checkbox" class="export-section" value="prompts" checked /> prompts</label>
+                  <label><input type="checkbox" class="export-section" value="review" checked /> review</label>
+                  <label><input type="checkbox" class="export-section" value="diagnostics" checked /> diagnostics</label>
+                </div>
+              </div>
+            </div>
+            <div class="btns">
+              <button id="exportBtn" class="secondary">导出并下载</button>
+              <button id="exportPreviewBtn" class="secondary">刷新分块预览</button>
+            </div>
+          </article>
+          <article class="card panel-result">
+            <h3><span class="idx">02</span>导出内容分块</h3>
+            <div id="exportBlocks" class="result-sections hidden"></div>
+            <pre id="exportPreviewSummary">{}</pre>
+          </article>
+        </section>
       </section>
 
       <section id="agentEditorView" class="view-pane hidden">
@@ -811,13 +856,16 @@
       const completedSections = $("completedSections");
       const workflowView = $("workflowView");
       const agentEditorView = $("agentEditorView");
+      const exportCenterView = $("exportCenterView");
       const navWorkflow = $("navWorkflow");
       const navAgentEditor = $("navAgentEditor");
+      const navExportCenter = $("navExportCenter");
 
       const runBtn = $("runBtn");
       const continueBtn = $("continueBtn");
       const stateBtn = $("stateBtn");
       const historyBtn = $("historyBtn");
+      const exportBtn = $("exportBtn");
       const hydrateResultBtn = $("hydrateResultBtn");
       const purgeBtn = $("purgeBtn");
       const genProjectIdBtn = $("genProjectIdBtn");
@@ -827,6 +875,7 @@
       const agentSaveBtn = $("agentSaveBtn");
       const persistEnvBtn = $("persistEnvBtn");
       const secretToggleBtn = $("secretToggleBtn");
+      const exportPreviewBtn = $("exportPreviewBtn");
 
       const cfgProvider = $("cfgProvider");
       const cfgGlobalModel = $("cfgGlobalModel");
@@ -849,6 +898,11 @@
       const cfgModelPlanner = $("cfgModelPlanner");
       const cfgModelPromptBuilder = $("cfgModelPromptBuilder");
       const cfgModelReviewer = $("cfgModelReviewer");
+      const exportFormat = $("exportFormat");
+      const exportProjectId = $("exportProjectId");
+      const exportSectionNodes = () => Array.from(document.querySelectorAll(".export-section"));
+      const exportBlocks = $("exportBlocks");
+      const exportPreviewSummary = $("exportPreviewSummary");
       const providerGroups = Array.from(document.querySelectorAll("[data-provider-group]"));
 
       const apiKeyInputs = [
@@ -895,6 +949,7 @@
         resumeBtn.disabled = workflowLocked;
         stateBtn.disabled = false;
         historyBtn.disabled = false;
+        exportBtn.disabled = workflowLocked;
         hydrateResultBtn.disabled = false;
         purgeBtn.disabled = loading;
         genProjectIdBtn.disabled = loading;
@@ -916,17 +971,25 @@
       }
 
       function switchView(viewName) {
+        workflowView.classList.add("hidden");
+        agentEditorView.classList.add("hidden");
+        exportCenterView.classList.add("hidden");
+        navWorkflow.classList.remove("active");
+        navAgentEditor.classList.remove("active");
+        navExportCenter.classList.remove("active");
+
         if (viewName === "agents") {
-          workflowView.classList.add("hidden");
           agentEditorView.classList.remove("hidden");
-          navWorkflow.classList.remove("active");
           navAgentEditor.classList.add("active");
           return;
         }
+        if (viewName === "export") {
+          exportCenterView.classList.remove("hidden");
+          navExportCenter.classList.add("active");
+          return;
+        }
         workflowView.classList.remove("hidden");
-        agentEditorView.classList.add("hidden");
         navWorkflow.classList.add("active");
-        navAgentEditor.classList.remove("active");
       }
 
       function setSecretInputMode(show) {
@@ -1309,6 +1372,95 @@
         };
       }
 
+      function getExportProjectId() {
+        const pidRaw = (exportProjectId.value || projectId.value || "").trim();
+        if (!pidRaw) {
+          setResult({ error: "请先填写 Project ID（导出中心或工作台）。" });
+          return null;
+        }
+        return pidRaw;
+      }
+
+      function renderExportBlocks(values) {
+        const sectionDefs = [
+          { key: "requirement_doc", label: "需求文档", exportKey: "requirement_doc" },
+          { key: "feasibility_report", label: "可行性报告", exportKey: "feasibility_report" },
+          { key: "architecture_plan", label: "架构方案", exportKey: "architecture_plan" },
+          { key: "task_breakdown", label: "任务拆解", exportKey: "tasks" },
+          { key: "prompt_pack", label: "提示词包", exportKey: "prompts" },
+          { key: "review_report", label: "评审报告", exportKey: "review" },
+        ];
+        const diagnostics = values && values.review_report && Array.isArray(values.review_report.diagnostics)
+          ? values.review_report.diagnostics
+          : [];
+        const blocks = sectionDefs
+          .filter((s) => values && Object.prototype.hasOwnProperty.call(values, s.key))
+          .map((s) => {
+            const payload = values[s.key];
+            return `
+              <article class="result-block">
+                <h4 class="result-block-title">${escapeHtml(s.label)} (${escapeHtml(s.exportKey)})</h4>
+                <div class="btns" style="margin: 0 0 8px 0;">
+                  <button class="secondary export-single-btn" data-section="${escapeHtmlAttr(s.exportKey)}">导出本块</button>
+                </div>
+                <pre>${escapeHtml(pretty(payload))}</pre>
+              </article>
+            `;
+          });
+        if (diagnostics.length > 0) {
+          blocks.push(`
+            <article class="result-block">
+              <h4 class="result-block-title">评审诊断 (diagnostics)</h4>
+              <div class="btns" style="margin: 0 0 8px 0;">
+                <button class="secondary export-single-btn" data-section="diagnostics">导出本块</button>
+              </div>
+              <pre>${escapeHtml(pretty(diagnostics))}</pre>
+            </article>
+          `);
+        }
+        if (!blocks.length) {
+          exportBlocks.classList.add("hidden");
+          exportBlocks.innerHTML = "";
+          exportPreviewSummary.textContent = pretty({ message: "当前项目暂无可预览导出内容。" });
+          return;
+        }
+        exportBlocks.innerHTML = blocks.join("");
+        exportBlocks.classList.remove("hidden");
+        exportPreviewSummary.textContent = pretty({
+          project_id: values.project_id || null,
+          blocks: blocks.length,
+          diagnostics_count: diagnostics.length,
+        });
+        exportBlocks.querySelectorAll(".export-single-btn").forEach((btn) => {
+          btn.addEventListener("click", async function () {
+            const section = String(btn.getAttribute("data-section") || "").trim();
+            if (!section) return;
+            const pidRaw = getExportProjectId();
+            if (!pidRaw) return;
+            const fmt = String(exportFormat.value || "json");
+            const query = "format=" + encodeURIComponent(fmt) + "&sections=" + encodeURIComponent(section);
+            const url = "/runs/" + encodeURIComponent(pidRaw) + "/export/file?" + query;
+            window.open(url, "_blank");
+            setResult({
+              project_id: pidRaw,
+              status: "download_started",
+              format: fmt,
+              sections: [section],
+              message: `已触发分块下载：${section}`,
+            });
+          });
+        });
+      }
+
+      async function loadExportPreview() {
+        const pidRaw = getExportProjectId();
+        if (!pidRaw) return;
+        const pid = encodeURIComponent(pidRaw);
+        const data = await callApi("/runs/" + pid + "/state");
+        const values = data && data.values ? data.values : {};
+        renderExportBlocks(values);
+      }
+
       function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
       }
@@ -1582,6 +1734,48 @@
         }
       });
 
+      exportBtn.addEventListener("click", async function () {
+        const pidRaw = getExportProjectId();
+        if (!pidRaw) return;
+        const sections = exportSectionNodes()
+          .filter((node) => node.checked)
+          .map((node) => String(node.value || "").trim())
+          .filter(Boolean);
+        if (!sections.length) {
+          setResult({ error: "请至少选择一个导出分段。" });
+          return;
+        }
+        setLoading(true);
+        try {
+          const fmt = String(exportFormat.value || "json");
+          const query = "format=" + encodeURIComponent(fmt) + "&sections=" + encodeURIComponent(sections.join(","));
+          const url = "/runs/" + encodeURIComponent(pidRaw) + "/export/file?" + query;
+          window.open(url, "_blank");
+          setResult({
+            project_id: pidRaw,
+            status: "download_started",
+            format: fmt,
+            sections,
+            message: "已触发下载，请在浏览器下载弹窗中选择保存位置。"
+          });
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      exportPreviewBtn.addEventListener("click", async function () {
+        setLoading(true);
+        try {
+          await loadExportPreview();
+        } catch (err) {
+          setResult({ error: String(err) });
+        } finally {
+          setLoading(false);
+        }
+      });
+
       hydrateResultBtn.addEventListener("click", async function () {
         setLoading(true);
         try {
@@ -1638,6 +1832,14 @@
         } finally {
           setLoading(false);
         }
+      });
+
+      navExportCenter.addEventListener("click", function () {
+        if (!exportProjectId.value.trim() && projectId.value.trim()) {
+          exportProjectId.value = projectId.value.trim();
+        }
+        switchView("export");
+        loadExportPreview().catch(function () {});
       });
 
       secretToggleBtn.addEventListener("click", async function () {

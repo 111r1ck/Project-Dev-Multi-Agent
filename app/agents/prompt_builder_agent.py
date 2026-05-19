@@ -2,12 +2,13 @@ from langchain.agents import create_agent
 
 from app.agents.llm import get_llm
 from app.agents.schemas import PromptPackOutput
+from app.tools.prompt_tools import prompt_quality_check
 
 
 def build_prompt_builder_agent():
     return create_agent(
         model=get_llm("prompt_builder"),
-        tools=[],
+        tools=[prompt_quality_check],
         system_prompt=(
             "你是AI编程协作专家，负责为每个任务生成高质量编码/测试提示词。"
             "任务目标："

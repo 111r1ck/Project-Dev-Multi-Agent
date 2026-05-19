@@ -9,6 +9,7 @@ from app.graph.nodes.common import (
 )
 from app.graph.state import ProjectState
 from app.services.prompt_cache import load_cached_prompts, save_cached_prompts
+from app.tools.prompt_tools import prompt_quality_check
 
 
 PROMPT_BUILD_BATCH_SIZE = 8
@@ -29,9 +30,11 @@ def _build_fallback_prompt(task: dict) -> dict:
     return {
         "task_title": title,
         "coding_prompt": (
-            f"请实现任务：{title}\n"
+            f"任务目标：请实现任务《{title}》。\n"
             f"任务描述：{description}\n"
             f"优先级：{priority}，责任角色：{owner}，依赖：{deps_text}\n"
+            "输入：明确接口参数、鉴权上下文与异常输入。\n"
+            "输出：明确成功结果、失败结果、错误信息与关键日志字段。\n"
             "要求：给出可运行实现，包含接口/数据结构/异常处理；"
             "如果存在外部依赖，提供可替代mock方案。"
         ),
@@ -126,6 +129,33 @@ def _priority_rank(priority: str) -> int:
 
 def _is_p0_task(task: dict) -> bool:
     return _priority_rank(task.get("priority", "")) == 0
+
+
+def _passes_prompt_quality(coding_prompt: str) -> bool:
+    try:
+        result = prompt_quality_check.invoke({"coding_prompt": str(coding_prompt or "")})
+        return bool(result)
+    except Exception:
+        text = str(coding_prompt or "")
+        return all(token in text for token in ("目标", "输入", "输出"))
+
+
+def _repair_coding_prompt_for_quality(task: dict, coding_prompt: str) -> str:
+    text = str(coding_prompt or "").strip()
+    if _passes_prompt_quality(text):
+        return text
+    title = str(task.get("title", "未命名任务")).strip()
+    description = str(task.get("description", "")).strip()
+    depends_on = [str(dep).strip() for dep in (task.get("depends_on", []) or []) if str(dep).strip()]
+    deps_text = "、".join(depends_on) if depends_on else "无"
+    supplement = (
+        f"\n目标：完成《{title}》核心实现并满足验收要求。"
+        f"\n输入：业务输入参数、鉴权上下文、上游依赖（{deps_text}）与异常输入。"
+        "\n输出：成功结果、失败结果、状态变更与关键日志。"
+    )
+    if description:
+        supplement += f"\n约束背景：{description}"
+    return (text + supplement).strip()
 
 
 def _extract_review_focus_indices(tasks: list[dict], review_report: dict) -> set[int]:
@@ -346,8 +376,39 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
         else:
             prompt_pack.append(_build_fallback_prompt(task))
 
+    quality_failed_titles: list[str] = []
+    for idx, item in enumerate(prompt_pack):
+        task = all_tasks[idx] if idx < len(all_tasks) else {}
+        coding_prompt = str(item.get("coding_prompt", "")).strip()
+        if _passes_prompt_quality(coding_prompt):
+            item["quality_checked"] = True
+            item["quality_failed"] = False
+            continue
+        should_repair = bool(item.get("is_fallback", False) or item.get("forced_for_p0", False))
+        repaired = coding_prompt
+        passed_after_repair = False
+        if should_repair:
+            repaired = _repair_coding_prompt_for_quality(task, coding_prompt)
+            item["coding_prompt"] = repaired
+            passed_after_repair = _passes_prompt_quality(repaired)
+        item["quality_checked"] = True
+        item["quality_repaired"] = should_repair
+        item["quality_failed"] = not passed_after_repair
+        if not passed_after_repair:
+            title = str(item.get("task_title", "")).strip() or str(task.get("title", "")).strip() or "未命名任务"
+            quality_failed_titles.append(title)
+
+    errors = list(state.get("errors", []))
+    if quality_failed_titles:
+        errors.append(
+            "提示词质量前置检查未全部通过："
+            + "、".join(quality_failed_titles[:5])
+            + (" 等" if len(quality_failed_titles) > 5 else "")
+        )
+
     return {
         **state,
+        "errors": errors,
         "prompt_pack": prompt_pack,
         "prompt_builder_diagnostics": {
             "model_calls": model_calls,
@@ -359,6 +420,9 @@ def prompt_builder_node(state: ProjectState) -> ProjectState:
             "total_tasks": len(all_tasks),
             "generated_tasks": sum(1 for item in prompt_pack if not bool(item.get("is_fallback", False))),
             "fallback_tasks": sum(1 for item in prompt_pack if bool(item.get("is_fallback", False))),
+            "quality_checked_tasks": len(prompt_pack),
+            "quality_failed_tasks": len(quality_failed_titles),
+            "quality_repaired_tasks": sum(1 for item in prompt_pack if bool(item.get("quality_repaired", False))),
         },
         "next_step": "reviewer",
     }

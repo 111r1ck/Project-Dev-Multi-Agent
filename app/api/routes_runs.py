@@ -2,12 +2,18 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.dependencies import get_compiled_graph
+from app.services.export_service import (
+    SUPPORTED_EXPORT_FORMATS,
+    SUPPORTED_EXPORT_SECTIONS,
+    build_run_export_content,
+    export_run_artifact,
+)
 from app.services.report_renderer import render_result
 from app.config import settings
 from app.storage.checkpoints import purge_thread_checkpoints
@@ -26,6 +32,20 @@ class RunRequest(BaseModel):
 
 class ResumeRunRequest(BaseModel):
     human_feedback: dict[str, Any] | str
+
+
+class ExportRunRequest(BaseModel):
+    format: str = "json"
+    sections: list[str] = [
+        "summary",
+        "requirement_doc",
+        "feasibility_report",
+        "architecture_plan",
+        "tasks",
+        "prompts",
+        "review",
+        "diagnostics",
+    ]
 
 
 def _serialize_interrupt(item: Any) -> Any:
@@ -360,3 +380,146 @@ async def delete_project_checkpoints(project_id: str):
         "status": "deleted",
         **result,
     }
+
+
+@router.post("/{project_id}/export")
+async def export_project_run_result(
+    project_id: str,
+    req: ExportRunRequest,
+    compiled_graph=Depends(get_compiled_graph),
+):
+    fmt = str(req.format or "").strip().lower()
+    if fmt not in SUPPORTED_EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的导出格式: {fmt}; 支持: {sorted(SUPPORTED_EXPORT_FORMATS)}",
+        )
+    sections = [str(item or "").strip().lower() for item in (req.sections or []) if str(item or "").strip()]
+    if not sections:
+        raise HTTPException(status_code=400, detail="sections 不能为空")
+    invalid = [item for item in sections if item not in SUPPORTED_EXPORT_SECTIONS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 sections: {invalid}; 支持: {sorted(SUPPORTED_EXPORT_SECTIONS)}",
+        )
+
+    config = {"configurable": {"thread_id": project_id}}
+    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+    values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+    if not values:
+        raise HTTPException(status_code=404, detail="未找到可导出的运行结果")
+
+    exported = await run_in_threadpool(
+        export_run_artifact,
+        project_id=project_id,
+        values=values,
+        export_format=fmt,
+        sections=sections,
+    )
+    return {
+        "project_id": project_id,
+        "status": "exported",
+        **exported,
+    }
+
+
+@router.get("/{project_id}/export/download")
+async def download_project_run_result(
+    project_id: str,
+    format: str = Query("json"),
+    sections: str = Query("summary,requirement_doc,feasibility_report,architecture_plan,tasks,prompts,review,diagnostics"),
+    compiled_graph=Depends(get_compiled_graph),
+):
+    fmt = str(format or "").strip().lower()
+    if fmt not in SUPPORTED_EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的导出格式: {fmt}; 支持: {sorted(SUPPORTED_EXPORT_FORMATS)}",
+        )
+    raw_sections = [s.strip().lower() for s in str(sections or "").split(",") if s.strip()]
+    if not raw_sections:
+        raise HTTPException(status_code=400, detail="sections 不能为空")
+    invalid = [item for item in raw_sections if item not in SUPPORTED_EXPORT_SECTIONS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 sections: {invalid}; 支持: {sorted(SUPPORTED_EXPORT_SECTIONS)}",
+        )
+
+    config = {"configurable": {"thread_id": project_id}}
+    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+    values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+    if not values:
+        raise HTTPException(status_code=404, detail="未找到可导出的运行结果")
+
+    content = await run_in_threadpool(
+        build_run_export_content,
+        project_id=project_id,
+        values=values,
+        export_format=fmt,
+        sections=raw_sections,
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{content["filename"]}"',
+        "X-Export-SHA256": str(content["sha256"]),
+    }
+    return {
+        "project_id": project_id,
+        "status": "download_ready",
+        "format": fmt,
+        "sections": raw_sections,
+        "filename": content["filename"],
+        "mime_type": content["mime_type"],
+        "size_bytes": content["size_bytes"],
+        "sha256": content["sha256"],
+        "download_url": (
+            f"/runs/{project_id}/export/file"
+            f"?format={fmt}&sections={','.join(raw_sections)}"
+        ),
+    }
+
+
+@router.get("/{project_id}/export/file")
+async def download_project_run_result_file(
+    project_id: str,
+    format: str = Query("json"),
+    sections: str = Query("summary,requirement_doc,feasibility_report,architecture_plan,tasks,prompts,review,diagnostics"),
+    compiled_graph=Depends(get_compiled_graph),
+):
+    fmt = str(format or "").strip().lower()
+    if fmt not in SUPPORTED_EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的导出格式: {fmt}; 支持: {sorted(SUPPORTED_EXPORT_FORMATS)}",
+        )
+    raw_sections = [s.strip().lower() for s in str(sections or "").split(",") if s.strip()]
+    if not raw_sections:
+        raise HTTPException(status_code=400, detail="sections 不能为空")
+    invalid = [item for item in raw_sections if item not in SUPPORTED_EXPORT_SECTIONS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 sections: {invalid}; 支持: {sorted(SUPPORTED_EXPORT_SECTIONS)}",
+        )
+    config = {"configurable": {"thread_id": project_id}}
+    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+    values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+    if not values:
+        raise HTTPException(status_code=404, detail="未找到可导出的运行结果")
+    content = await run_in_threadpool(
+        build_run_export_content,
+        project_id=project_id,
+        values=values,
+        export_format=fmt,
+        sections=raw_sections,
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{content["filename"]}"',
+        "X-Export-SHA256": str(content["sha256"]),
+    }
+    return Response(
+        content=content["bytes"],
+        media_type=str(content["mime_type"]),
+        headers=headers,
+    )
