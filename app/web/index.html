@@ -108,6 +108,10 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
+    .lang-switch {
+      width: 100%;
+      margin-top: 4px;
+    }
 
     .nav-section {
       display: grid;
@@ -541,7 +545,8 @@
         <span class="brand-dot"></span>
         <h1>LangGraph Orchestrator</h1>
       </div>
-      <span class="nav-chip">control plane</span>
+      <span id="navChip" class="nav-chip">control plane</span>
+      <button id="langToggleBtn" class="secondary lang-switch" type="button">English</button>
       <div class="nav-section">
         <div id="navWorkflow" class="nav-item active">工作台 / Runs</div>
         <div id="navAgentEditor" class="nav-item">编辑 Agent</div>
@@ -554,14 +559,14 @@
 
     <main class="main">
       <section class="topbar">
-        <h2>LangGraph Multi-Agent Console</h2>
-        <p>运行工作流、查看 checkpoint、处理中断并继续执行。</p>
+        <h2 id="topbarTitle">LangGraph Multi-Agent Console</h2>
+        <p id="topbarDesc">运行工作流、查看 checkpoint、处理中断并继续执行。</p>
       </section>
 
       <section id="workflowView" class="view-pane">
       <section class="grid">
         <article class="card panel-run">
-          <h3><span class="idx">01</span>运行任务</h3>
+          <h3 id="runPanelTitle"><span class="idx">01</span>运行任务</h3>
           <div>
             <label>Project ID</label>
             <div class="btns" style="margin-top: 0;">
@@ -570,7 +575,7 @@
             </div>
           </div>
           <div style="margin-top: 10px;">
-            <label>Raw Requirement</label>
+            <label id="rawRequirementLabel">Raw Requirement</label>
             <textarea id="rawRequirement" placeholder="输入你的项目需求..."></textarea>
           </div>
           <div class="btns">
@@ -580,7 +585,7 @@
         </article>
 
         <article class="card panel-state">
-          <h3><span class="idx">02</span>状态与历史</h3>
+          <h3 id="statePanelTitle"><span class="idx">02</span>状态与历史</h3>
           <div class="btns">
             <button id="stateBtn" class="secondary">刷新 state</button>
             <button id="historyBtn" class="secondary">刷新 history</button>
@@ -600,12 +605,12 @@
         </article>
 
         <article class="card panel-resume">
-          <h3><span class="idx">03</span>人工补充并恢复</h3>
+          <h3 id="resumePanelTitle"><span class="idx">03</span>人工补充并恢复</h3>
           <div class="btns">
             <button id="loadMissingBtn" class="secondary">从结果载入缺失字段</button>
           </div>
           <div id="missingFieldsWrap" class="kv-wrap">
-            <div class="hint">当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。</div>
+            <div id="missingFieldsHint" class="hint">当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。</div>
           </div>
           <div>
             <label>Human Feedback (JSON，可选手动编辑)</label>
@@ -617,7 +622,7 @@
         </article>
 
         <section class="card panel-result">
-          <h3>结果 <span id="statusTag" class="status"></span></h3>
+          <h3 id="resultPanelTitle">结果 <span id="statusTag" class="status"></span></h3>
           <pre id="resultSummaryPre">{}</pre>
           <div id="completedSections" class="result-sections hidden"></div>
           <details>
@@ -695,7 +700,7 @@
                 </select>
               </div>
               <div>
-                <label>全局默认模型（所有Agent兜底）</label>
+                <label id="cfgGlobalModelLabel">全局默认模型（所有Agent兜底）</label>
                 <input id="cfgGlobalModel" list="modelOptions" placeholder="例如: gpt-5 / qwen3.6-plus" />
               </div>
               <div>
@@ -822,6 +827,21 @@
               <label>模型</label>
               <input id="cfgModelReviewer" list="modelOptions" placeholder="为空则使用全局默认模型" />
             </div>
+            <div class="agent-item">
+              <div class="agent-name">高级配置：按 Agent 独立 Provider / Key / Model</div>
+              <div class="agent-desc">JSON 对象，key 为 agent 标识（requirement/feasibility/architect/planner/prompt_builder/reviewer）。可覆盖 provider、model、temperature 与各 provider 连接字段。</div>
+              <div class="btns" style="margin: 0 0 8px 0;">
+                <button id="toggleAgentProfilesSecretBtn" class="secondary" type="button">显示高级配置密钥</button>
+              </div>
+              <label>agent_llm_profiles (JSON)</label>
+              <textarea id="cfgAgentProfilesJson" placeholder='{"planner":{"provider":"openai","model":"gpt-5","openai_api_key":"sk-..."}}'></textarea>
+            </div>
+          </article>
+
+          <article class="card agent-card full">
+            <h3><span class="idx">04</span>各 Agent 独立 Provider 配置（可视化）</h3>
+            <div class="hint">以下配置会自动写入 <code>agent_llm_profiles</code>。留空表示回退到全局配置。</div>
+            <div id="agentProfileRows" style="margin-top:10px; display:grid; gap:10px;"></div>
           </article>
         </section>
         <datalist id="modelOptions">
@@ -860,6 +880,17 @@
       const navWorkflow = $("navWorkflow");
       const navAgentEditor = $("navAgentEditor");
       const navExportCenter = $("navExportCenter");
+      const navChip = $("navChip");
+      const langToggleBtn = $("langToggleBtn");
+      const topbarTitle = $("topbarTitle");
+      const topbarDesc = $("topbarDesc");
+      const runPanelTitle = $("runPanelTitle");
+      const statePanelTitle = $("statePanelTitle");
+      const resumePanelTitle = $("resumePanelTitle");
+      const rawRequirementLabel = $("rawRequirementLabel");
+      const missingFieldsHint = $("missingFieldsHint");
+      const resultPanelTitle = $("resultPanelTitle");
+      const cfgGlobalModelLabel = $("cfgGlobalModelLabel");
 
       const runBtn = $("runBtn");
       const continueBtn = $("continueBtn");
@@ -875,6 +906,7 @@
       const agentSaveBtn = $("agentSaveBtn");
       const persistEnvBtn = $("persistEnvBtn");
       const secretToggleBtn = $("secretToggleBtn");
+      const toggleAgentProfilesSecretBtn = $("toggleAgentProfilesSecretBtn");
       const exportPreviewBtn = $("exportPreviewBtn");
 
       const cfgProvider = $("cfgProvider");
@@ -898,6 +930,7 @@
       const cfgModelPlanner = $("cfgModelPlanner");
       const cfgModelPromptBuilder = $("cfgModelPromptBuilder");
       const cfgModelReviewer = $("cfgModelReviewer");
+      const cfgAgentProfilesJson = $("cfgAgentProfilesJson");
       const exportFormat = $("exportFormat");
       const exportProjectId = $("exportProjectId");
       const exportSectionNodes = () => Array.from(document.querySelectorAll(".export-section"));
@@ -914,11 +947,520 @@
       ];
 
       let revealSecrets = false;
+      let revealAgentProfilesSecrets = false;
+      let currentLang = localStorage.getItem("ui_lang") || "zh";
       let loadedAgentSettings = {};
       let currentMissingFields = [];
+      let agentProfilesRaw = {};
+      const AGENT_PROFILE_KEYS = [
+        "requirement",
+        "feasibility",
+        "architect",
+        "planner",
+        "prompt_builder",
+        "reviewer",
+      ];
+      const AGENT_PROFILE_LABELS = {
+        requirement: { zh: "需求分析", en: "Requirement Analyst" },
+        feasibility: { zh: "可行性分析", en: "Feasibility Analyst" },
+        architect: { zh: "架构设计", en: "Architect" },
+        planner: { zh: "任务规划", en: "Planner" },
+        prompt_builder: { zh: "提示词构建", en: "Prompt Builder" },
+        reviewer: { zh: "评审", en: "Reviewer" },
+      };
+      const AGENT_MODEL_INPUT_IDS = {
+        requirement: "cfgModelRequirement",
+        feasibility: "cfgModelFeasibility",
+        architect: "cfgModelArchitect",
+        planner: "cfgModelPlanner",
+        prompt_builder: "cfgModelPromptBuilder",
+        reviewer: "cfgModelReviewer",
+      };
+      const I18N = {
+        zh: {
+          nav_chip: "control plane",
+          nav_workflow: "工作台 / Runs",
+          nav_agent_editor: "编辑 Agent",
+          nav_export_center: "导出中心",
+          topbar_desc: "运行工作流、查看 checkpoint、处理中断并继续执行。",
+          run_panel_title: '<span class="idx">01</span>运行任务',
+          state_panel_title: '<span class="idx">02</span>状态与历史',
+          resume_panel_title: '<span class="idx">03</span>人工补充并恢复',
+          result_panel_title: '结果 <span id="statusTag" class="status"></span>',
+          raw_requirement_label: "Raw Requirement",
+          raw_requirement_ph: "输入你的项目需求...",
+          project_id_ph: "例如: edutech-ai-001",
+          export_project_id_ph: "留空时使用工作台中的 Project ID",
+          feedback_ph: '可手动输入 JSON，例如：{"字段A":"补充说明"}',
+          missing_hint: "当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。",
+          btn_run: "执行 /runs",
+          btn_continue: "执行 /continue",
+          btn_state: "刷新 state",
+          btn_history: "刷新 history",
+          btn_hydrate: "从 state 恢复结果显示",
+          btn_purge: "清理该项目ID checkpoint",
+          btn_resume: "执行 /resume",
+          btn_load_missing: "从结果载入缺失字段",
+          btn_export: "导出并下载",
+          btn_export_preview: "刷新分块预览",
+          btn_gen_id: "生成ID",
+          btn_show_secret: "显示密钥",
+          btn_hide_secret: "隐藏密钥",
+          btn_show_advanced_secret: "显示高级配置密钥",
+          btn_hide_advanced_secret: "隐藏高级配置密钥",
+          no_export_preview: "当前项目暂无可预览导出内容。",
+          missing_export_section: "请至少选择一个导出分段。",
+          fill_project_id: "请先填写 Project ID（导出中心或工作台）。",
+          no_agent_change: "没有需要保存的变更。",
+          confirm_run_override: "项目 {pid} 已有完成结果。继续执行会以新需求生成新结果并覆盖当前展示，是否继续？",
+          confirm_purge: "确认删除项目 {pid} 的全部 checkpoint 历史吗？此操作不可撤销。",
+          confirm_persist_env: "确认将当前编辑 Agent 配置写入 .env 吗？该操作会覆盖同名配置项，重启后将按新值生效。",
+          msg_export_section_started: "已触发分块下载：{section}",
+          msg_export_started: "已触发下载，请在浏览器下载弹窗中选择保存位置。",
+          lang_toggle: "English",
+          fill_project_id_or_gen: "请先填写 Project ID（或点击“生成ID”）",
+          missing_field_placeholder: "请填写该项补充信息",
+          in_progress_message: "流程仍在执行中，请稍后刷新 state/history。",
+          section_requirement_doc: "需求文档",
+          section_feasibility_report: "可行性报告",
+          section_architecture_plan: "架构方案",
+          section_task_breakdown: "任务拆解",
+          section_prompt_pack: "提示词包",
+          section_review_report: "评审报告",
+          section_diagnostics: "评审诊断",
+          export_single_block: "导出本块",
+          follow_global_option: "(跟随全局)",
+          model_follow_global_ph: "留空则跟随全局/默认",
+          api_key_auto_map_ph: "按 provider 自动映射对应 key 字段",
+          base_url_auto_map_ph: "按 provider 自动映射 base_url/endpoint",
+          summary_state_full: "展开 state 完整 JSON",
+          summary_history_full: "展开 history 完整 JSON",
+          summary_result_full: "展开结果完整 JSON",
+          export_config_title: '<span class="idx">01</span>导出配置',
+          export_content_title: '<span class="idx">02</span>导出内容分块',
+          export_format_label: "导出格式",
+          export_sections_label: "导出分段",
+          agent_runtime_title: '<span class="idx">01</span>运行时模型与提供商',
+          agent_conn_title: '<span class="idx">02</span>API Key 与连接',
+          agent_models_title: '<span class="idx">03</span>各 Agent 模型配置',
+          agent_profiles_title: '<span class="idx">04</span>各 Agent 独立 Provider 配置（可视化）',
+          agent_profiles_hint: "以下配置会自动写入 agent_llm_profiles。留空表示回退到全局配置。",
+          btn_agent_refresh: "刷新配置",
+          btn_agent_save: "保存配置",
+          btn_persist_env: "保存到 .env",
+          label_global_model: "全局默认模型（所有Agent兜底）",
+          provider_openai_conn: "OpenAI 连接",
+          provider_azure_conn: "Azure OpenAI 连接",
+          provider_openrouter_conn: "OpenRouter 连接",
+          provider_anthropic_conn: "Anthropic 连接",
+          provider_google_conn: "Google 连接",
+          provider_ollama_conn: "Ollama 连接",
+          agent_name_requirement: "需求分析 Agent",
+          agent_name_feasibility: "可行性分析 Agent",
+          agent_name_architect: "架构设计 Agent",
+          agent_name_planner: "任务规划 Agent",
+          agent_name_prompt_builder: "提示词构建 Agent",
+          agent_name_reviewer: "评审 Agent",
+          agent_desc_requirement: "功能：把原始需求抽取并整理为结构化需求文档。",
+          agent_desc_feasibility: "功能：评估可行性、风险、缺失信息和MVP范围。",
+          agent_desc_architect: "功能：生成可落地的系统架构与模块规划。",
+          agent_desc_planner: "功能：拆解任务、依赖和优先级。",
+          agent_desc_prompt_builder: "功能：为每个任务产出编码与测试提示词。",
+          agent_desc_reviewer: "功能：评审方案是否有遗漏、冲突或不可实施问题。",
+          label_model: "模型",
+        },
+        en: {
+          nav_chip: "control plane",
+          nav_workflow: "Workspace / Runs",
+          nav_agent_editor: "Agent Editor",
+          nav_export_center: "Export Center",
+          topbar_desc: "Run workflows, inspect checkpoints, handle interrupts, and continue execution.",
+          run_panel_title: '<span class="idx">01</span>Run Tasks',
+          state_panel_title: '<span class="idx">02</span>State & History',
+          resume_panel_title: '<span class="idx">03</span>Resume with Human Input',
+          result_panel_title: 'Result <span id="statusTag" class="status"></span>',
+          raw_requirement_label: "Raw Requirement",
+          raw_requirement_ph: "Enter your project requirement...",
+          project_id_ph: "e.g. edutech-ai-001",
+          export_project_id_ph: "Leave blank to use the Workspace Project ID",
+          feedback_ph: 'Input JSON manually, e.g.: {"fieldA":"additional details"}',
+          missing_hint: "No pending fields. Run /runs first or load an interrupted result.",
+          btn_run: "Run /runs",
+          btn_continue: "Run /continue",
+          btn_state: "Refresh state",
+          btn_history: "Refresh history",
+          btn_hydrate: "Restore result from state",
+          btn_purge: "Purge checkpoint for this project ID",
+          btn_resume: "Run /resume",
+          btn_load_missing: "Load missing fields from result",
+          btn_export: "Export & download",
+          btn_export_preview: "Refresh section preview",
+          btn_gen_id: "Generate ID",
+          btn_show_secret: "Show secrets",
+          btn_hide_secret: "Hide secrets",
+          btn_show_advanced_secret: "Show advanced secrets",
+          btn_hide_advanced_secret: "Hide advanced secrets",
+          no_export_preview: "No exportable preview content for this project.",
+          missing_export_section: "Select at least one export section.",
+          fill_project_id: "Please fill in Project ID first (Export Center or Workspace).",
+          no_agent_change: "No changes to save.",
+          confirm_run_override: "Project {pid} already has a completed result. Continue to run with a new requirement and overwrite the current display?",
+          confirm_purge: "Delete all checkpoint history for project {pid}? This action cannot be undone.",
+          confirm_persist_env: "Persist current Agent settings to .env? Existing keys with the same names will be overwritten and take effect after restart.",
+          msg_export_section_started: "Section download started: {section}",
+          msg_export_started: "Download started. Choose save location in your browser dialog.",
+          lang_toggle: "中文",
+          fill_project_id_or_gen: "Please enter Project ID first (or click Generate ID).",
+          missing_field_placeholder: "Please fill in this field",
+          in_progress_message: "Workflow is still running. Refresh state/history shortly.",
+          section_requirement_doc: "Requirement Document",
+          section_feasibility_report: "Feasibility Report",
+          section_architecture_plan: "Architecture Plan",
+          section_task_breakdown: "Task Breakdown",
+          section_prompt_pack: "Prompt Pack",
+          section_review_report: "Review Report",
+          section_diagnostics: "Review Diagnostics",
+          export_single_block: "Export this block",
+          follow_global_option: "(Follow global)",
+          model_follow_global_ph: "Leave empty to follow global/default",
+          api_key_auto_map_ph: "Auto-mapped key field by provider",
+          base_url_auto_map_ph: "Auto-mapped base_url/endpoint by provider",
+          summary_state_full: "Expand full state JSON",
+          summary_history_full: "Expand full history JSON",
+          summary_result_full: "Expand full result JSON",
+          export_config_title: '<span class="idx">01</span>Export Configuration',
+          export_content_title: '<span class="idx">02</span>Export Content Blocks',
+          export_format_label: "Export format",
+          export_sections_label: "Export sections",
+          agent_runtime_title: '<span class="idx">01</span>Runtime Models & Provider',
+          agent_conn_title: '<span class="idx">02</span>API Keys & Connections',
+          agent_models_title: '<span class="idx">03</span>Per-Agent Model Settings',
+          agent_profiles_title: '<span class="idx">04</span>Per-Agent Provider Profiles (Visual)',
+          agent_profiles_hint: "These values are written to agent_llm_profiles. Leave blank to fall back to global settings.",
+          btn_agent_refresh: "Refresh settings",
+          btn_agent_save: "Save settings",
+          btn_persist_env: "Persist to .env",
+          label_global_model: "Global default model (fallback for all agents)",
+          provider_openai_conn: "OpenAI connection",
+          provider_azure_conn: "Azure OpenAI connection",
+          provider_openrouter_conn: "OpenRouter connection",
+          provider_anthropic_conn: "Anthropic connection",
+          provider_google_conn: "Google connection",
+          provider_ollama_conn: "Ollama connection",
+          agent_name_requirement: "Requirement Analyst Agent",
+          agent_name_feasibility: "Feasibility Analyst Agent",
+          agent_name_architect: "Architect Agent",
+          agent_name_planner: "Planner Agent",
+          agent_name_prompt_builder: "Prompt Builder Agent",
+          agent_name_reviewer: "Reviewer Agent",
+          agent_desc_requirement: "Purpose: extract and normalize raw requirements into a structured requirement document.",
+          agent_desc_feasibility: "Purpose: evaluate feasibility, risks, missing information, and MVP scope.",
+          agent_desc_architect: "Purpose: generate an implementable system architecture and module plan.",
+          agent_desc_planner: "Purpose: break down tasks, dependencies, and priorities.",
+          agent_desc_prompt_builder: "Purpose: produce coding and testing prompts for each task.",
+          agent_desc_reviewer: "Purpose: review the plan for gaps, conflicts, and implementation risks.",
+          label_model: "Model",
+        },
+      };
+
+      function t(key, vars) {
+        const dict = I18N[currentLang] || I18N.zh;
+        const fallback = I18N.zh;
+        let text = dict[key] || fallback[key] || key;
+        if (vars && typeof vars === "object") {
+          Object.keys(vars).forEach((k) => {
+            text = text.replaceAll("{" + k + "}", String(vars[k]));
+          });
+        }
+        return text;
+      }
+
+      function applyI18n() {
+        document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+        navChip.textContent = t("nav_chip");
+        navWorkflow.textContent = t("nav_workflow");
+        navAgentEditor.textContent = t("nav_agent_editor");
+        navExportCenter.textContent = t("nav_export_center");
+        topbarDesc.textContent = t("topbar_desc");
+        runPanelTitle.innerHTML = t("run_panel_title");
+        statePanelTitle.innerHTML = t("state_panel_title");
+        resumePanelTitle.innerHTML = t("resume_panel_title");
+        const statusNode = $("statusTag");
+        resultPanelTitle.childNodes[0].nodeValue = (currentLang === "en" ? "Result " : "结果 ");
+        if (statusNode && statusNode !== statusTag) {
+          // keep backward compatibility if status node is re-resolved by browser
+        }
+        rawRequirementLabel.textContent = t("raw_requirement_label");
+        rawRequirement.placeholder = t("raw_requirement_ph");
+        projectId.placeholder = t("project_id_ph");
+        exportProjectId.placeholder = t("export_project_id_ph");
+        feedbackText.placeholder = t("feedback_ph");
+        missingFieldsHint.textContent = t("missing_hint");
+        runBtn.textContent = t("btn_run");
+        continueBtn.textContent = t("btn_continue");
+        stateBtn.textContent = t("btn_state");
+        historyBtn.textContent = t("btn_history");
+        hydrateResultBtn.textContent = t("btn_hydrate");
+        purgeBtn.textContent = t("btn_purge");
+        resumeBtn.textContent = t("btn_resume");
+        loadMissingBtn.textContent = t("btn_load_missing");
+        exportBtn.textContent = t("btn_export");
+        exportPreviewBtn.textContent = t("btn_export_preview");
+        genProjectIdBtn.textContent = t("btn_gen_id");
+        agentLoadBtn.textContent = t("btn_agent_refresh");
+        agentSaveBtn.textContent = t("btn_agent_save");
+        persistEnvBtn.textContent = t("btn_persist_env");
+        secretToggleBtn.textContent = revealSecrets ? t("btn_hide_secret") : t("btn_show_secret");
+        if (toggleAgentProfilesSecretBtn) {
+          toggleAgentProfilesSecretBtn.textContent = revealAgentProfilesSecrets
+            ? t("btn_hide_advanced_secret")
+            : t("btn_show_advanced_secret");
+        }
+        langToggleBtn.textContent = t("lang_toggle");
+        document.querySelectorAll('[data-i18n="follow_global_option"]').forEach((el) => {
+          el.textContent = t("follow_global_option");
+        });
+        document.querySelectorAll('[data-i18n-ph="model_follow_global_ph"]').forEach((el) => {
+          el.placeholder = t("model_follow_global_ph");
+        });
+        document.querySelectorAll('[data-i18n-ph="api_key_auto_map_ph"]').forEach((el) => {
+          el.placeholder = t("api_key_auto_map_ph");
+        });
+        document.querySelectorAll('[data-i18n-ph="base_url_auto_map_ph"]').forEach((el) => {
+          el.placeholder = t("base_url_auto_map_ph");
+        });
+        const summaries = document.querySelectorAll("#workflowView details > summary");
+        if (summaries[0]) summaries[0].textContent = t("summary_state_full");
+        if (summaries[1]) summaries[1].textContent = t("summary_history_full");
+        if (summaries[2]) summaries[2].textContent = t("summary_result_full");
+
+        const exportRunCardTitle = document.querySelector("#exportCenterView .panel-run h3");
+        const exportResultCardTitle = document.querySelector("#exportCenterView .panel-result h3");
+        if (exportRunCardTitle) exportRunCardTitle.innerHTML = t("export_config_title");
+        if (exportResultCardTitle) exportResultCardTitle.innerHTML = t("export_content_title");
+        const exportLabels = document.querySelectorAll("#exportCenterView .panel-run label");
+        if (exportLabels[1]) exportLabels[1].textContent = t("export_format_label");
+        if (exportLabels[2]) exportLabels[2].textContent = t("export_sections_label");
+
+        const agentTitles = document.querySelectorAll("#agentEditorView .agent-card h3");
+        if (agentTitles[0]) agentTitles[0].innerHTML = t("agent_runtime_title");
+        if (agentTitles[1]) agentTitles[1].innerHTML = t("agent_conn_title");
+        if (agentTitles[2]) agentTitles[2].innerHTML = t("agent_models_title");
+        if (agentTitles[3]) agentTitles[3].innerHTML = t("agent_profiles_title");
+        const profilesHint = document.querySelector("#agentEditorView .agent-card.full .hint");
+        if (profilesHint) profilesHint.textContent = t("agent_profiles_hint");
+        if (cfgGlobalModelLabel) cfgGlobalModelLabel.textContent = t("label_global_model");
+
+        const providerTitles = document.querySelectorAll("#agentEditorView .provider-title");
+        const providerTitleKeys = [
+          "provider_openai_conn",
+          "provider_azure_conn",
+          "provider_openrouter_conn",
+          "provider_anthropic_conn",
+          "provider_google_conn",
+          "provider_ollama_conn",
+        ];
+        providerTitles.forEach((el, idx) => {
+          const key = providerTitleKeys[idx];
+          if (key) el.textContent = t(key);
+        });
+
+        const modelCard = document.querySelectorAll("#agentEditorView .agent-card.full")[0];
+        if (modelCard) {
+          const names = modelCard.querySelectorAll(".agent-name");
+          const descs = modelCard.querySelectorAll(".agent-desc");
+          const nameKeys = [
+            "agent_name_requirement",
+            "agent_name_feasibility",
+            "agent_name_architect",
+            "agent_name_planner",
+            "agent_name_prompt_builder",
+            "agent_name_reviewer",
+          ];
+          const descKeys = [
+            "agent_desc_requirement",
+            "agent_desc_feasibility",
+            "agent_desc_architect",
+            "agent_desc_planner",
+            "agent_desc_prompt_builder",
+            "agent_desc_reviewer",
+          ];
+          names.forEach((el, idx) => {
+            if (nameKeys[idx]) el.textContent = t(nameKeys[idx]);
+          });
+          descs.forEach((el, idx) => {
+            if (descKeys[idx]) el.textContent = t(descKeys[idx]);
+          });
+          modelCard.querySelectorAll("label").forEach((el) => {
+            if (el.textContent.trim() === "模型" || el.textContent.trim().toLowerCase() === "model") {
+              el.textContent = t("label_model");
+            }
+          });
+        }
+      }
 
       function pretty(v) {
         return JSON.stringify(v, null, 2);
+      }
+
+      function maskSecretValue(v) {
+        const s = String(v || "");
+        if (!s) return "";
+        if (s.length <= 8) return "*".repeat(s.length);
+        return s.slice(0, 4) + "*".repeat(Math.max(0, s.length - 8)) + s.slice(-4);
+      }
+
+      function maskProfilesSecrets(profiles) {
+        const secretKeys = [
+          "openai_api_key",
+          "azure_openai_api_key",
+          "anthropic_api_key",
+          "google_api_key",
+          "openrouter_api_key",
+        ];
+        const cloned = JSON.parse(JSON.stringify(profiles || {}));
+        Object.keys(cloned || {}).forEach((agentKey) => {
+          const p = cloned[agentKey];
+          if (!p || typeof p !== "object") return;
+          secretKeys.forEach((k) => {
+            if (Object.prototype.hasOwnProperty.call(p, k)) {
+              p[k] = maskSecretValue(p[k]);
+            }
+          });
+        });
+        return cloned;
+      }
+
+      function renderAgentProfilesJson() {
+        if (!cfgAgentProfilesJson) return;
+        if (revealAgentProfilesSecrets) {
+          cfgAgentProfilesJson.readOnly = false;
+          cfgAgentProfilesJson.value = pretty(agentProfilesRaw || {});
+        } else {
+          cfgAgentProfilesJson.readOnly = true;
+          cfgAgentProfilesJson.value = pretty(maskProfilesSecrets(agentProfilesRaw || {}));
+        }
+      }
+
+      function profileFieldNames(provider) {
+        const p = normalizeProviderKey(provider);
+        if (p === "openai") return { keyField: "openai_api_key", baseField: "openai_base_url" };
+        if (p === "azure_openai") return { keyField: "azure_openai_api_key", baseField: "azure_openai_endpoint" };
+        if (p === "openrouter") return { keyField: "openrouter_api_key", baseField: "openrouter_base_url" };
+        if (p === "anthropic") return { keyField: "anthropic_api_key", baseField: "" };
+        if (p === "google") return { keyField: "google_api_key", baseField: "" };
+        if (p === "ollama") return { keyField: "", baseField: "ollama_base_url" };
+        return { keyField: "", baseField: "" };
+      }
+
+      function buildAgentProfileRows() {
+        const wrap = $("agentProfileRows");
+        if (!wrap) return;
+        const langKey = currentLang === "en" ? "en" : "zh";
+        wrap.innerHTML = AGENT_PROFILE_KEYS.map((key) => `
+          <div class="agent-item" data-agent-row="${key}">
+            <div class="agent-name">${AGENT_PROFILE_LABELS[key][langKey]} Agent</div>
+            <div class="row">
+              <div>
+                <label>Provider</label>
+                <select data-field="provider">
+                  <option value="" data-i18n="follow_global_option">(跟随全局)</option>
+                  <option value="openai">openai</option>
+                  <option value="azure_openai">azure_openai</option>
+                  <option value="openrouter">openrouter</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="google">google</option>
+                  <option value="ollama">ollama</option>
+                </select>
+              </div>
+              <div>
+                <label>Model</label>
+                <input data-field="model" data-i18n-ph="model_follow_global_ph" list="modelOptions" placeholder="留空则跟随全局/默认" />
+              </div>
+              <div>
+                <label>API Key</label>
+                <input data-field="api_key" data-i18n-ph="api_key_auto_map_ph" type="password" autocomplete="off" placeholder="按 provider 自动映射对应 key 字段" />
+              </div>
+              <div>
+                <label>Base URL / Endpoint</label>
+                <input data-field="base_url" data-i18n-ph="base_url_auto_map_ph" placeholder="按 provider 自动映射 base_url/endpoint" />
+              </div>
+            </div>
+          </div>
+        `).join("");
+
+        wrap.querySelectorAll("input,select").forEach((node) => {
+          node.addEventListener("change", syncProfilesJsonFromRows);
+          node.addEventListener("input", syncProfilesJsonFromRows);
+        });
+        applyI18n();
+      }
+
+      function syncModelInputsFromRows() {
+        AGENT_PROFILE_KEYS.forEach((key) => {
+          const row = document.querySelector(`[data-agent-row="${key}"]`);
+          if (!row) return;
+          const modelFromRow = String(row.querySelector('[data-field="model"]').value || "").trim();
+          const targetId = AGENT_MODEL_INPUT_IDS[key];
+          const target = targetId ? $(targetId) : null;
+          if (!target) return;
+          target.value = modelFromRow;
+        });
+      }
+
+      function syncRowsFromModelInputs() {
+        AGENT_PROFILE_KEYS.forEach((key) => {
+          const row = document.querySelector(`[data-agent-row="${key}"]`);
+          if (!row) return;
+          const targetId = AGENT_MODEL_INPUT_IDS[key];
+          const source = targetId ? $(targetId) : null;
+          if (!source) return;
+          row.querySelector('[data-field="model"]').value = String(source.value || "").trim();
+        });
+        syncProfilesJsonFromRows();
+      }
+
+      function applyProfilesToRows(profiles) {
+        const data = profiles && typeof profiles === "object" ? profiles : {};
+        AGENT_PROFILE_KEYS.forEach((key) => {
+          const row = document.querySelector(`[data-agent-row="${key}"]`);
+          if (!row) return;
+          const p = data[key] && typeof data[key] === "object" ? data[key] : {};
+          const provider = String(p.provider || "");
+          row.querySelector('[data-field="provider"]').value = provider;
+          row.querySelector('[data-field="model"]').value = String(p.model || "");
+          const map = profileFieldNames(provider);
+          row.querySelector('[data-field="api_key"]').value = map.keyField ? String(p[map.keyField] || "") : "";
+          row.querySelector('[data-field="base_url"]').value = map.baseField ? String(p[map.baseField] || "") : "";
+        });
+        syncModelInputsFromRows();
+      }
+
+      function collectProfilesFromRows() {
+        const out = {};
+        AGENT_PROFILE_KEYS.forEach((key) => {
+          const row = document.querySelector(`[data-agent-row="${key}"]`);
+          if (!row) return;
+          const provider = String(row.querySelector('[data-field="provider"]').value || "").trim();
+          const model = String(row.querySelector('[data-field="model"]').value || "").trim();
+          const apiKey = String(row.querySelector('[data-field="api_key"]').value || "").trim();
+          const baseUrl = String(row.querySelector('[data-field="base_url"]').value || "").trim();
+          const map = profileFieldNames(provider);
+          const profile = {};
+          if (provider) profile.provider = provider;
+          if (model) profile.model = model;
+          if (apiKey && map.keyField) profile[map.keyField] = apiKey;
+          if (baseUrl && map.baseField) profile[map.baseField] = baseUrl;
+          if (Object.keys(profile).length > 0) out[key] = profile;
+        });
+        return out;
+      }
+
+      function syncProfilesJsonFromRows() {
+        const profiles = collectProfilesFromRows();
+        agentProfilesRaw = profiles || {};
+        syncModelInputsFromRows();
+        renderAgentProfilesJson();
       }
 
       function generateProjectId() {
@@ -936,7 +1478,7 @@
       function getProjectIdOrError() {
         const pid = projectId.value.trim();
         if (!pid) {
-          setResult({ error: "请先填写 Project ID（或点击“生成ID”）" });
+          setResult({ error: t("fill_project_id_or_gen") });
           return null;
         }
         return pid;
@@ -944,11 +1486,12 @@
 
       function refreshActionButtons() {
         const workflowLocked = loading || executionInProgress;
+        const infoRefreshLocked = loading && !executionInProgress;
         runBtn.disabled = workflowLocked;
         continueBtn.disabled = workflowLocked;
         resumeBtn.disabled = workflowLocked;
-        stateBtn.disabled = false;
-        historyBtn.disabled = false;
+        stateBtn.disabled = infoRefreshLocked;
+        historyBtn.disabled = infoRefreshLocked;
         exportBtn.disabled = workflowLocked;
         hydrateResultBtn.disabled = false;
         purgeBtn.disabled = loading;
@@ -996,6 +1539,9 @@
         apiKeyInputs.forEach((input) => {
           input.type = show ? "text" : "password";
         });
+        document.querySelectorAll('[data-field="api_key"]').forEach((input) => {
+          input.type = show ? "text" : "password";
+        });
       }
 
       function normalizeProviderKey(provider) {
@@ -1039,6 +1585,31 @@
         cfgModelPlanner.value = loadedAgentSettings.planner_llm_model || "";
         cfgModelPromptBuilder.value = loadedAgentSettings.prompt_builder_llm_model || "";
         cfgModelReviewer.value = loadedAgentSettings.reviewer_llm_model || "";
+        const incomingProfiles = (loadedAgentSettings.agent_llm_profiles && typeof loadedAgentSettings.agent_llm_profiles === "object")
+          ? loadedAgentSettings.agent_llm_profiles
+          : {};
+        const mergedProfiles = JSON.parse(JSON.stringify(incomingProfiles || {}));
+        const legacyModelMap = {
+          requirement: loadedAgentSettings.requirement_llm_model || "",
+          feasibility: loadedAgentSettings.feasibility_llm_model || "",
+          architect: loadedAgentSettings.architect_llm_model || "",
+          planner: loadedAgentSettings.planner_llm_model || "",
+          prompt_builder: loadedAgentSettings.prompt_builder_llm_model || "",
+          reviewer: loadedAgentSettings.reviewer_llm_model || "",
+        };
+        AGENT_PROFILE_KEYS.forEach((k) => {
+          const legacyModel = String(legacyModelMap[k] || "").trim();
+          if (!legacyModel) return;
+          if (!mergedProfiles[k] || typeof mergedProfiles[k] !== "object") {
+            mergedProfiles[k] = {};
+          }
+          if (!String(mergedProfiles[k].model || "").trim()) {
+            mergedProfiles[k].model = legacyModel;
+          }
+        });
+        agentProfilesRaw = mergedProfiles || {};
+        renderAgentProfilesJson();
+        applyProfilesToRows(mergedProfiles);
         updateProviderFieldsVisibility(cfgProvider.value);
       }
 
@@ -1058,6 +1629,7 @@
           planner_llm_model: cfgModelPlanner.value.trim(),
           prompt_builder_llm_model: cfgModelPromptBuilder.value.trim(),
           reviewer_llm_model: cfgModelReviewer.value.trim(),
+          agent_llm_profiles: agentProfilesRaw || {},
           openai_api_key: cfgOpenAiKey.value.trim(),
           openai_base_url: cfgOpenAiBase.value.trim(),
           azure_openai_api_key: cfgAzureKey.value.trim(),
@@ -1070,10 +1642,22 @@
           ollama_base_url: cfgOllamaBase.value.trim(),
         };
 
+        const rowProfiles = collectProfilesFromRows();
+        payload.agent_llm_profiles = rowProfiles;
+
         const updates = {};
         Object.keys(payload).forEach((key) => {
           const nextValue = payload[key];
           const prevValue = loadedAgentSettings[key];
+          if (key === "agent_llm_profiles") {
+            const nextJson = pretty(nextValue || {});
+            const prevJson = pretty(prevValue || {});
+            if (nextJson === prevJson) {
+              return;
+            }
+            updates[key] = nextValue || {};
+            return;
+          }
           if (String(nextValue) === String(prevValue ?? "")) {
             return;
           }
@@ -1121,12 +1705,12 @@
         }
 
         const sectionDefs = [
-          { key: "requirement_doc", label: "需求文档（requirement_doc）" },
-          { key: "feasibility_report", label: "可行性报告（feasibility_report）" },
-          { key: "architecture_plan", label: "架构方案（architecture_plan）" },
-          { key: "task_breakdown", label: "任务拆解（task_breakdown）" },
-          { key: "prompt_pack", label: "提示词包（prompt_pack）" },
-          { key: "review_report", label: "评审报告（review_report）" }
+          { key: "requirement_doc", label: `${t("section_requirement_doc")}（requirement_doc）` },
+          { key: "feasibility_report", label: `${t("section_feasibility_report")}（feasibility_report）` },
+          { key: "architecture_plan", label: `${t("section_architecture_plan")}（architecture_plan）` },
+          { key: "task_breakdown", label: `${t("section_task_breakdown")}（task_breakdown）` },
+          { key: "prompt_pack", label: `${t("section_prompt_pack")}（prompt_pack）` },
+          { key: "review_report", label: `${t("section_review_report")}（review_report）` }
         ];
         const reviewDiagnostics = (
           data.result &&
@@ -1144,7 +1728,7 @@
         if (reviewDiagnostics.length > 0) {
           sectionDefs.push({
             key: "__review_diagnostics__",
-            label: "评审诊断（diagnostics）"
+            label: `${t("section_diagnostics")}（diagnostics）`
           });
         }
 
@@ -1222,7 +1806,7 @@
 
       function renderMissingFieldRows(fields, currentValues) {
         if (!fields.length) {
-          missingFieldsWrap.innerHTML = '<div class="hint">当前没有待补充字段。先执行 /runs 或加载 interrupted 结果。</div>';
+          missingFieldsWrap.innerHTML = `<div class="hint">${escapeHtml(t("missing_hint"))}</div>`;
           return;
         }
         const rows = fields.map((field, idx) => {
@@ -1233,7 +1817,7 @@
           return `
             <div class="kv-row">
               <div class="kv-key">${idx + 1}. ${escapeHtml(safeKey)}</div>
-              <textarea data-kv-key="${escapeHtmlAttr(safeKey)}" placeholder="请填写该项补充信息">${escapeHtml(value)}</textarea>
+              <textarea data-kv-key="${escapeHtmlAttr(safeKey)}" placeholder="${escapeHtmlAttr(t("missing_field_placeholder"))}">${escapeHtml(value)}</textarea>
             </div>
           `;
         }).join("");
@@ -1304,7 +1888,7 @@
           summary.interrupt_count = humanRounds;
           summary.human_rounds = humanRounds;
           summary.next = Array.isArray(data.next) ? data.next : [];
-          summary.message = "流程仍在执行中，请稍后刷新 state/history。";
+          summary.message = t("in_progress_message");
         }
         if (data.status === "completed" && data.result) {
           summary.interrupt_count = humanRounds;
@@ -1375,7 +1959,7 @@
       function getExportProjectId() {
         const pidRaw = (exportProjectId.value || projectId.value || "").trim();
         if (!pidRaw) {
-          setResult({ error: "请先填写 Project ID（导出中心或工作台）。" });
+          setResult({ error: t("fill_project_id") });
           return null;
         }
         return pidRaw;
@@ -1383,12 +1967,12 @@
 
       function renderExportBlocks(values) {
         const sectionDefs = [
-          { key: "requirement_doc", label: "需求文档", exportKey: "requirement_doc" },
-          { key: "feasibility_report", label: "可行性报告", exportKey: "feasibility_report" },
-          { key: "architecture_plan", label: "架构方案", exportKey: "architecture_plan" },
-          { key: "task_breakdown", label: "任务拆解", exportKey: "tasks" },
-          { key: "prompt_pack", label: "提示词包", exportKey: "prompts" },
-          { key: "review_report", label: "评审报告", exportKey: "review" },
+          { key: "requirement_doc", label: t("section_requirement_doc"), exportKey: "requirement_doc" },
+          { key: "feasibility_report", label: t("section_feasibility_report"), exportKey: "feasibility_report" },
+          { key: "architecture_plan", label: t("section_architecture_plan"), exportKey: "architecture_plan" },
+          { key: "task_breakdown", label: t("section_task_breakdown"), exportKey: "tasks" },
+          { key: "prompt_pack", label: t("section_prompt_pack"), exportKey: "prompts" },
+          { key: "review_report", label: t("section_review_report"), exportKey: "review" },
         ];
         const diagnostics = values && values.review_report && Array.isArray(values.review_report.diagnostics)
           ? values.review_report.diagnostics
@@ -1401,7 +1985,7 @@
               <article class="result-block">
                 <h4 class="result-block-title">${escapeHtml(s.label)} (${escapeHtml(s.exportKey)})</h4>
                 <div class="btns" style="margin: 0 0 8px 0;">
-                  <button class="secondary export-single-btn" data-section="${escapeHtmlAttr(s.exportKey)}">导出本块</button>
+                  <button class="secondary export-single-btn" data-section="${escapeHtmlAttr(s.exportKey)}">${escapeHtml(t("export_single_block"))}</button>
                 </div>
                 <pre>${escapeHtml(pretty(payload))}</pre>
               </article>
@@ -1410,9 +1994,9 @@
         if (diagnostics.length > 0) {
           blocks.push(`
             <article class="result-block">
-              <h4 class="result-block-title">评审诊断 (diagnostics)</h4>
+              <h4 class="result-block-title">${escapeHtml(t("section_diagnostics"))} (diagnostics)</h4>
               <div class="btns" style="margin: 0 0 8px 0;">
-                <button class="secondary export-single-btn" data-section="diagnostics">导出本块</button>
+                <button class="secondary export-single-btn" data-section="diagnostics">${escapeHtml(t("export_single_block"))}</button>
               </div>
               <pre>${escapeHtml(pretty(diagnostics))}</pre>
             </article>
@@ -1421,7 +2005,7 @@
         if (!blocks.length) {
           exportBlocks.classList.add("hidden");
           exportBlocks.innerHTML = "";
-          exportPreviewSummary.textContent = pretty({ message: "当前项目暂无可预览导出内容。" });
+          exportPreviewSummary.textContent = pretty({ message: t("no_export_preview") });
           return;
         }
         exportBlocks.innerHTML = blocks.join("");
@@ -1446,7 +2030,7 @@
               status: "download_started",
               format: fmt,
               sections: [section],
-              message: `已触发分块下载：${section}`,
+              message: t("msg_export_section_started", { section }),
             });
           });
         });
@@ -1626,9 +2210,7 @@
           try {
             const completed = await isProjectCompleted(pidRaw);
             if (completed) {
-              shouldRun = window.confirm(
-                `项目 ${pidRaw} 已有完成结果。继续执行会以新需求生成新结果并覆盖当前展示，是否继续？`
-              );
+              shouldRun = window.confirm(t("confirm_run_override", { pid: pidRaw }));
             }
           } catch (_) {
             // If state check fails, continue with normal run behavior.
@@ -1742,7 +2324,7 @@
           .map((node) => String(node.value || "").trim())
           .filter(Boolean);
         if (!sections.length) {
-          setResult({ error: "请至少选择一个导出分段。" });
+          setResult({ error: t("missing_export_section") });
           return;
         }
         setLoading(true);
@@ -1756,7 +2338,7 @@
             status: "download_started",
             format: fmt,
             sections,
-            message: "已触发下载，请在浏览器下载弹窗中选择保存位置。"
+            message: t("msg_export_started")
           });
         } catch (err) {
           setResult({ error: String(err) });
@@ -1790,9 +2372,7 @@
       purgeBtn.addEventListener("click", async function () {
         const pid = getProjectIdOrError();
         if (!pid) return;
-        const confirmed = window.confirm(
-          `确认删除项目 ${pid} 的全部 checkpoint 历史吗？此操作不可撤销。`
-        );
+        const confirmed = window.confirm(t("confirm_purge", { pid }));
         if (!confirmed) {
           return;
         }
@@ -1841,10 +2421,17 @@
         switchView("export");
         loadExportPreview().catch(function () {});
       });
+      langToggleBtn.addEventListener("click", function () {
+        currentLang = currentLang === "zh" ? "en" : "zh";
+        localStorage.setItem("ui_lang", currentLang);
+        buildAgentProfileRows();
+        applyProfilesToRows(agentProfilesRaw || {});
+        applyI18n();
+      });
 
       secretToggleBtn.addEventListener("click", async function () {
         revealSecrets = !revealSecrets;
-        secretToggleBtn.textContent = revealSecrets ? "隐藏密钥" : "显示密钥";
+        secretToggleBtn.textContent = revealSecrets ? t("btn_hide_secret") : t("btn_show_secret");
         setSecretInputMode(revealSecrets);
         setLoading(true);
         try {
@@ -1855,6 +2442,16 @@
           setLoading(false);
         }
       });
+
+      if (toggleAgentProfilesSecretBtn) {
+        toggleAgentProfilesSecretBtn.addEventListener("click", function () {
+          revealAgentProfilesSecrets = !revealAgentProfilesSecrets;
+          toggleAgentProfilesSecretBtn.textContent = revealAgentProfilesSecrets
+            ? t("btn_hide_advanced_secret")
+            : t("btn_show_advanced_secret");
+          renderAgentProfilesJson();
+        });
+      }
 
       cfgProvider.addEventListener("change", function () {
         updateProviderFieldsVisibility(cfgProvider.value);
@@ -1874,7 +2471,7 @@
       agentSaveBtn.addEventListener("click", async function () {
         const updates = collectAgentSettingsPayload();
         if (!Object.keys(updates).length) {
-          setResult({ status: "agent_settings", message: "没有需要保存的变更。" });
+          setResult({ status: "agent_settings", message: t("no_agent_change") });
           return;
         }
         setLoading(true);
@@ -1897,9 +2494,7 @@
       });
 
       persistEnvBtn.addEventListener("click", async function () {
-        const confirmed = window.confirm(
-          "确认将当前编辑 Agent 配置写入 .env 吗？该操作会覆盖同名配置项，重启后将按新值生效。"
-        );
+        const confirmed = window.confirm(t("confirm_persist_env"));
         if (!confirmed) {
           return;
         }
@@ -1926,9 +2521,33 @@
 
       loadState().catch(function () {});
       loadHistory().catch(function () {});
+      buildAgentProfileRows();
+      [
+        cfgModelRequirement,
+        cfgModelFeasibility,
+        cfgModelArchitect,
+        cfgModelPlanner,
+        cfgModelPromptBuilder,
+        cfgModelReviewer,
+      ].forEach((input) => {
+        input.addEventListener("change", syncRowsFromModelInputs);
+        input.addEventListener("input", syncRowsFromModelInputs);
+      });
+      if (cfgAgentProfilesJson) {
+        cfgAgentProfilesJson.addEventListener("blur", function () {
+          if (!revealAgentProfilesSecrets) return;
+          const parsed = tryParseJson(cfgAgentProfilesJson.value);
+          if (parsed && typeof parsed === "object") {
+            agentProfilesRaw = parsed;
+            applyProfilesToRows(parsed);
+            renderAgentProfilesJson();
+          }
+        });
+      }
       setSecretInputMode(false);
       updateProviderFieldsVisibility(cfgProvider.value || "openai");
       refreshActionButtons();
+      applyI18n();
     })();
   </script>
 </body>

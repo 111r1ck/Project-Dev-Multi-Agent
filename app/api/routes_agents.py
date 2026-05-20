@@ -45,6 +45,13 @@ class AgentSettingsUpdateRequest(BaseModel):
     openrouter_api_key: str | None = None
     openrouter_base_url: str | None = None
 
+    # Per-agent profile map, e.g.
+    # {
+    #   "planner": {"provider":"openai","model":"gpt-5","openai_api_key":"..."},
+    #   "reviewer": {"provider":"anthropic","model":"claude-3-5-sonnet-latest","anthropic_api_key":"..."}
+    # }
+    agent_llm_profiles: dict[str, dict[str, Any]] | None = None
+
 
 @router.get("/settings")
 async def get_agents_settings(

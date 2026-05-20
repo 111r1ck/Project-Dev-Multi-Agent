@@ -156,3 +156,37 @@ codex-export-mcp
 - `app/storage`: checkpoint 与存储封装
 - `app/api`: FastAPI 路由
 - `tests`: 基础测试
+
+## 发布到 GitHub 前检查清单
+
+1. 确认未提交敏感信息
+
+- `.env` 已在 `.gitignore` 中，不应被跟踪
+- 仅提交 `.env.example` 作为模板
+
+2. 运行测试
+
+```bash
+pytest
+```
+
+3. 检查当前改动
+
+```bash
+git status
+```
+
+4. 提交并推送
+
+```bash
+git add .
+git commit -m "chore: prepare repository for GitHub publishing"
+git branch -M main
+git remote add origin <your-repo-url>
+git push -u origin main
+```
+
+说明：
+
+- 本仓库已提供 `LICENSE`（MIT）与 GitHub Actions CI（`.github/workflows/ci.yml`）。
+- CI 会在 `main/master` 的 push 和 pull request 上自动运行 `pytest`。

@@ -10,3 +10,4 @@ Thumbs.db
 *.egg-info/
 .pydeps/
 .tmp_pip*/
+exports/

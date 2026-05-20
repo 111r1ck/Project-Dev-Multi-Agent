@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 from typing import Any
 
@@ -28,12 +29,15 @@ _PERSIST_KEY_MAP = {
     "ollama_base_url": "OLLAMA_BASE_URL",
     "openrouter_api_key": "OPENROUTER_API_KEY",
     "openrouter_base_url": "OPENROUTER_BASE_URL",
+    "agent_llm_profiles": "AGENT_LLM_PROFILES_JSON",
 }
 
 
 def _stringify_env_value(value: Any) -> str:
     if value is None:
         return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value).replace("\n", " ").replace("\r", " ").strip()
@@ -71,4 +75,3 @@ def persist_runtime_settings_to_env(env_path: Path | None = None) -> dict[str, A
         "env_path": str(target),
         "updated_keys": updated_keys,
     }
-

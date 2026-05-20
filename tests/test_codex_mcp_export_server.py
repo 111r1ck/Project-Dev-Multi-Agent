@@ -1,9 +1,12 @@
 from pathlib import Path
 
 from app.mcp.codex_export_server import (
+    _format_run_result,
+    _generate_project_id,
     _build_state_summary,
     _list_project_export_files,
     _normalize_sections,
+    _read_export_file,
     _section_value,
 )
 
@@ -63,3 +66,26 @@ def test_list_project_export_files_sorted(tmp_path: Path):
     files = _list_project_export_files("demo-3", base_dir=str(tmp_path / "exports"))
     assert len(files) == 2
     assert {item["name"] for item in files} == {"a.json", "b.json"}
+
+
+def test_read_export_file_reads_text(tmp_path: Path):
+    base = tmp_path / "exports" / "demo-4"
+    base.mkdir(parents=True, exist_ok=True)
+    f1 = base / "demo.md"
+    f1.write_text("# x\nok", encoding="utf-8")
+    data = _read_export_file("demo-4", "demo.md", base_dir=str(tmp_path / "exports"))
+    assert data["name"] == "demo.md"
+    assert "ok" in data["content"]
+
+
+def test_generate_project_id_has_prefix():
+    pid = _generate_project_id("demo")
+    assert pid.startswith("demo-")
+    assert len(pid.split("-")) >= 3
+
+
+def test_format_run_result_interrupted_and_completed():
+    interrupted = _format_run_result("p1", {"__interrupt__": [{"x": 1}]})
+    assert interrupted["status"] == "interrupted"
+    completed = _format_run_result("p1", {"a": 1})
+    assert completed["status"] == "completed"

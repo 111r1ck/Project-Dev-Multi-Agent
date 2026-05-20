@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import threading
 from copy import deepcopy
 from typing import Any
@@ -15,6 +17,18 @@ _SECRET_FIELDS = {
     "google_api_key",
     "openrouter_api_key",
 }
+
+
+def _load_agent_profiles_from_env() -> dict[str, Any]:
+    raw = os.getenv("AGENT_LLM_PROFILES_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
 
 _DEFAULTS: dict[str, Any] = {
     "llm_provider": settings.llm_provider,
@@ -38,6 +52,7 @@ _DEFAULTS: dict[str, Any] = {
     "ollama_base_url": settings.ollama_base_url,
     "openrouter_api_key": settings.openrouter_api_key,
     "openrouter_base_url": settings.openrouter_base_url,
+    "agent_llm_profiles": _load_agent_profiles_from_env(),
 }
 
 _STATE: dict[str, Any] = deepcopy(_DEFAULTS)
@@ -61,6 +76,19 @@ def get_runtime_settings(*, reveal_secrets: bool = False) -> dict[str, Any]:
     for key in _SECRET_FIELDS:
         raw = str(data.get(key, "") or "")
         data[key] = _mask_secret(raw)
+
+    profiles = data.get("agent_llm_profiles", {})
+    if isinstance(profiles, dict):
+        masked_profiles: dict[str, Any] = {}
+        for agent_key, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            prof = deepcopy(profile)
+            for secret_key in _SECRET_FIELDS:
+                if secret_key in prof:
+                    prof[secret_key] = _mask_secret(str(prof.get(secret_key, "") or ""))
+            masked_profiles[str(agent_key)] = prof
+        data["agent_llm_profiles"] = masked_profiles
     return data
 
 
@@ -68,6 +96,17 @@ def update_runtime_settings(updates: dict[str, Any]) -> dict[str, Any]:
     with _LOCK:
         for key, value in updates.items():
             if key not in _STATE:
+                continue
+            if key == "agent_llm_profiles":
+                if isinstance(value, dict):
+                    normalized: dict[str, Any] = {}
+                    for agent_key, profile in value.items():
+                        if not isinstance(profile, dict):
+                            continue
+                        normalized[str(agent_key)] = {
+                            str(k): v for k, v in profile.items() if isinstance(k, str)
+                        }
+                    _STATE[key] = normalized
                 continue
             if value is None:
                 continue
@@ -131,4 +170,3 @@ def get_agent_definitions() -> list[dict[str, str]]:
             "model_field": "reviewer_llm_model",
         },
     ]
-
