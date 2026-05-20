@@ -12,3 +12,4 @@ Thumbs.db
 .tmp_pip*/
 exports/
 _ui_sample/
+docs/internal/
