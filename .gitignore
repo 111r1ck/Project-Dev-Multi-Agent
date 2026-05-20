@@ -11,3 +11,4 @@ Thumbs.db
 .pydeps/
 .tmp_pip*/
 exports/
+_ui_sample/
