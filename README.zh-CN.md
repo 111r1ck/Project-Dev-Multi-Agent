@@ -4,6 +4,8 @@
 
 基于 LangChain + LangGraph 的需求驱动开发多 Agent 骨架。
 
+第三方引用说明：[THIRD_PARTY_NOTICES](./docs/legal/THIRD_PARTY_NOTICES.zh-CN.md)
+
 ## 快速开始
 
 1. 安装依赖

@@ -4,6 +4,8 @@
 
 Requirement-driven multi-agent development scaffold built with LangChain + LangGraph.
 
+Third-party notices: [THIRD_PARTY_NOTICES](./docs/legal/THIRD_PARTY_NOTICES.md)
+
 ## Quick Start
 
 1. Install dependencies
