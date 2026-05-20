@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing.
+[中文文档](./CONTRIBUTING.zh-CN.md)
 
 ## Development Setup
 
@@ -11,7 +11,7 @@ Thanks for your interest in contributing.
 pip install -e .[dev]
 ```
 
-3. Copy env template:
+3. Copy environment template:
 
 ```bash
 cp .env.example .env
@@ -19,7 +19,7 @@ cp .env.example .env
 
 ## Test
 
-Run tests before submitting a pull request:
+Run tests before opening a pull request:
 
 ```bash
 pytest
@@ -29,5 +29,5 @@ pytest
 
 1. Keep commits focused and atomic.
 2. Add or update tests for behavior changes.
-3. Update `README.md` if public behavior or setup changes.
-4. Ensure no secrets are committed (`.env` must never be tracked).
+3. Update `README.md` when setup or public behavior changes.
+4. Never commit secrets (`.env` must remain untracked).
