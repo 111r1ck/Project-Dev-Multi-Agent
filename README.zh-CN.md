@@ -169,6 +169,80 @@ codex-export-mcp
 - `app/api`: FastAPI 路由
 - `tests`: 基础测试
 
+## Agent 结构路径图
+
+核心路径由“节点编排层”与“Agent 实现层”两部分组成：
+
+- 节点编排层（LangGraph 节点）：
+  - `app/graph/nodes/requirement_analyst.py`
+  - `app/graph/nodes/feasibility_analyst.py`
+  - `app/graph/nodes/architect.py`
+  - `app/graph/nodes/planner.py`
+  - `app/graph/nodes/prompt_builder.py`
+  - `app/graph/nodes/reviewer.py`
+  - `app/graph/nodes/human_gate.py`
+  - `app/graph/nodes/supervisor.py`
+- Agent 实现层（LLM Agent 封装）：
+  - `app/agents/requirement_agent.py`
+  - `app/agents/feasibility_agent.py`
+  - `app/agents/architect_agent.py`
+  - `app/agents/planner_agent.py`
+  - `app/agents/prompt_builder_agent.py`
+  - `app/agents/reviewer_agent.py`
+  - `app/agents/supervisor_agent.py`
+  - `app/agents/llm.py`（统一模型构建与 provider 路由）
+
+流程示意图：
+
+```mermaid
+flowchart TD
+    S["START"] --> U["supervisor<br/>app/graph/nodes/supervisor.py"]
+    U --> A["requirement_analyst<br/>app/graph/nodes/requirement_analyst.py"]
+    A --> B["feasibility_analyst<br/>app/graph/nodes/feasibility_analyst.py"]
+    B --> C["architect<br/>app/graph/nodes/architect.py"]
+    B -->|需要人工补充| G["human_gate<br/>app/graph/nodes/human_gate.py"]
+    G --> A
+    C --> D["planner<br/>app/graph/nodes/planner.py"]
+    D --> E["prompt_builder<br/>app/graph/nodes/prompt_builder.py"]
+    E --> F["reviewer<br/>app/graph/nodes/reviewer.py"]
+    F -->|回流到任务规划| D
+    F -->|回流到提示词构建| E
+    U -->|finish| X["END"]
+    A -->|finish| X
+    B -->|finish| X
+    C -->|finish| X
+    D -->|finish| X
+    E -->|finish| X
+    F -->|finish| X
+    G -->|finish| X
+```
+
+## 后处理与幻觉抑制说明
+
+为减少模型幻觉与“误阻塞”问题，项目在 `reviewer` 输出后增加了后处理校验层。
+
+- 基于证据的二次核验：
+  - 对阻塞问题回查 `task_breakdown` 与 `prompt_pack` 的交叉证据。
+  - 若证据强度不足，不直接保留为硬阻塞，而是降级为建议。
+- 双层覆盖校验：
+  - 先做紧凑证据筛查，再对未覆盖项进行全量证据复核。
+  - 在控制 token 成本的同时降低漏判/误判。
+- 结构化依赖校验：
+  - 依赖环依据显式 `depends_on` 图计算，而非仅依赖 LLM 文本描述。
+  - 当“循环依赖/时序错误”缺少结构证据时可触发降级。
+- 架构冲突门槛控制：
+  - 架构冲突要保留为阻塞项，需要更强的硬证据支撑。
+  - 证据不足或冲突描述不一致时，转为建议并保留诊断信息。
+- 诊断可解释性：
+  - 评审输出包含 `diagnostics`、`postprocess_reason_code` 等字段。
+  - 便于人工复核“为什么保留阻塞/为什么降级”。
+
+相关实现路径：
+
+- `app/graph/nodes/reviewer.py`
+- `app/graph/nodes/common.py`
+- `app/services/architecture_conflict_checker.py`
+
 ## 发布到 GitHub 前检查清单
 
 1. 确认未提交敏感信息

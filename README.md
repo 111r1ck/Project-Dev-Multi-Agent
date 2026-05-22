@@ -87,6 +87,80 @@ codex-export-mcp
 - `app/api`: FastAPI routes
 - `tests`: test suite
 
+## Agent Structure Paths
+
+The core structure is split into an orchestration layer and an agent implementation layer.
+
+- Orchestration layer (LangGraph nodes):
+  - `app/graph/nodes/requirement_analyst.py`
+  - `app/graph/nodes/feasibility_analyst.py`
+  - `app/graph/nodes/architect.py`
+  - `app/graph/nodes/planner.py`
+  - `app/graph/nodes/prompt_builder.py`
+  - `app/graph/nodes/reviewer.py`
+  - `app/graph/nodes/human_gate.py`
+  - `app/graph/nodes/supervisor.py`
+- Agent implementation layer (LLM agent wrappers):
+  - `app/agents/requirement_agent.py`
+  - `app/agents/feasibility_agent.py`
+  - `app/agents/architect_agent.py`
+  - `app/agents/planner_agent.py`
+  - `app/agents/prompt_builder_agent.py`
+  - `app/agents/reviewer_agent.py`
+  - `app/agents/supervisor_agent.py`
+  - `app/agents/llm.py` (shared model builder and provider routing)
+
+Flow overview:
+
+```mermaid
+flowchart TD
+    S["START"] --> U["supervisor<br/>app/graph/nodes/supervisor.py"]
+    U --> A["requirement_analyst<br/>app/graph/nodes/requirement_analyst.py"]
+    B --> C["architect<br/>app/graph/nodes/architect.py"]
+    A --> B["feasibility_analyst<br/>app/graph/nodes/feasibility_analyst.py"]
+    B -->|needs human input| G["human_gate<br/>app/graph/nodes/human_gate.py"]
+    G --> A
+    C --> D["planner<br/>app/graph/nodes/planner.py"]
+    D --> E["prompt_builder<br/>app/graph/nodes/prompt_builder.py"]
+    E --> F["reviewer<br/>app/graph/nodes/reviewer.py"]
+    F -->|rework planning| D
+    F -->|rework prompts| E
+    U -->|finish| X["END"]
+    A -->|finish| X
+    B -->|finish| X
+    C -->|finish| X
+    D -->|finish| X
+    E -->|finish| X
+    F -->|finish| X
+    G -->|finish| X
+```
+
+## Post-processing for Hallucination Reduction
+
+To reduce model hallucination and over-blocking, this project applies post-processing after reviewer output.
+
+- Evidence-based recheck:
+  - Blocking issues are re-validated against `task_breakdown` + `prompt_pack` evidence.
+  - Claims without enough cross-source support are downgraded instead of kept as hard blockers.
+- Two-layer coverage verification:
+  - Compact screening first, then full-evidence recheck for uncovered items.
+  - This lowers false negatives while keeping token usage controlled.
+- Structured dependency validation:
+  - Dependency cycle checks are computed from explicit `depends_on` graph, not guessed by LLM text.
+  - Cycle/timing claims can be downgraded when structure evidence does not support them.
+- Architecture conflict guardrail:
+  - Architecture-conflict issues require stronger hard evidence before remaining blocking.
+  - Weak/conflicting claims are converted to suggestions with diagnostics.
+- Diagnostics and explainability:
+  - Review outputs include `diagnostics`, `postprocess_reason_code`, and disposition metadata.
+  - This makes downgrade/keep decisions auditable for human reviewers.
+
+Related implementation paths:
+
+- `app/graph/nodes/reviewer.py`
+- `app/graph/nodes/common.py`
+- `app/services/architecture_conflict_checker.py`
+
 ## GitHub Publishing Checklist
 
 1. Ensure no secrets are tracked (`.env` must remain ignored)
