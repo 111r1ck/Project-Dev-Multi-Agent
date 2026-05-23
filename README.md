@@ -6,6 +6,36 @@ Requirement-driven multi-agent development scaffold built with LangChain + LangG
 
 Third-party notices: [THIRD_PARTY_NOTICES](./docs/legal/THIRD_PARTY_NOTICES.md)
 
+## Product Highlights
+
+This project turns one-line requirements into execution-ready delivery outputs through a multi-agent workflow.
+For simple requests, it can produce a practical plan in one pass, and for ambiguous requests it provides controlled
+human-in-the-loop recovery and rework loops.
+
+It is also built for Codex integration:
+
+- start from raw requirements and generate structured outputs ready for implementation
+- pass run results to Codex via MCP tools for a seamless "plan-to-code" workflow
+- keep checkpoint history and diagnostics so teams can trace and fix quality issues quickly
+
+Core capabilities:
+
+- requirement analysis, feasibility assessment, architecture planning, task decomposition
+- coding/test prompt generation with quality checks and fallback strategies
+- reviewer-driven rework loops for planner/prompt_builder until convergence
+- checkpointed execution with memory/sqlite/postgres backends
+- exportable artifacts for summary, architecture, tasks, prompts, and review diagnostics
+
+## Repository Layout
+
+- `app/agents`: specialized agents and schemas
+- `app/graph`: graph state, nodes, routes, builder
+- `app/tools`: callable tools for agents
+- `app/services`: business logic
+- `app/storage`: checkpoint and persistence wrappers
+- `app/api`: FastAPI routes
+- `tests`: test suite
+
 ## Quick Start
 
 1. Install dependencies
@@ -76,16 +106,6 @@ codex-export-mcp
 - `start_new_run(raw_requirement, project_id, project_prefix)`
 - `continue_run(project_id)`
 - `resume_run_with_feedback(project_id, human_feedback)`
-
-## Repository Layout
-
-- `app/agents`: specialized agents and schemas
-- `app/graph`: graph state, nodes, routes, builder
-- `app/tools`: callable tools for agents
-- `app/services`: business logic
-- `app/storage`: checkpoint and persistence wrappers
-- `app/api`: FastAPI routes
-- `tests`: test suite
 
 ## Agent Structure Paths
 

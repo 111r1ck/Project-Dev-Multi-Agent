@@ -6,6 +6,35 @@
 
 第三方引用说明：[THIRD_PARTY_NOTICES](./docs/legal/THIRD_PARTY_NOTICES.zh-CN.md)
 
+## 功能介绍
+
+这是一个把一句需求快速转成可落地研发产物的多 Agent 应用。
+对于简单需求可以一步到位输出结构化结果；对于信息不完整场景，支持人工中断补充、自动回流修复与继续执行。
+
+项目原生支持接入 Codex：
+
+- 从原始需求自动生成可执行的结构化产物
+- 通过 MCP 工具把结果直接接入 Codex，形成“需求到代码”的闭环
+- 保留 checkpoint 历史与诊断信息，方便快速定位和修复质量问题
+
+核心能力包括：
+
+- 需求分析、可行性评估、架构设计、任务拆解
+- 编码/测试提示词生成（含质量检查与兜底）
+- reviewer 评审回流机制，驱动 planner/prompt_builder 修复收敛
+- memory/sqlite/postgres 三种 checkpoint 后端
+- summary/architecture/tasks/prompts/review 等结果导出
+
+## 项目结构
+
+- `app/agents`: 每个专业 Agent 与 schema
+- `app/graph`: LangGraph 状态、节点、路由、图构建
+- `app/tools`: Agent 可调用工具
+- `app/services`: 纯业务逻辑
+- `app/storage`: checkpoint 与存储封装
+- `app/api`: FastAPI 路由
+- `tests`: 基础测试
+
 ## 快速开始
 
 1. 安装依赖
@@ -158,16 +187,6 @@ codex-export-mcp
 
 - 该 MCP server 复用现有导出服务，文件写入 `exports/{project_id}/`。
 - 保持与 HTTP 导出接口并行，不破坏现有前端与 API 调用链路。
-
-## 项目结构
-
-- `app/agents`: 每个专业 Agent 与 schema
-- `app/graph`: LangGraph 状态、节点、路由、图构建
-- `app/tools`: Agent 可调用工具
-- `app/services`: 纯业务逻辑
-- `app/storage`: checkpoint 与存储封装
-- `app/api`: FastAPI 路由
-- `tests`: 基础测试
 
 ## Agent 结构路径图
 
