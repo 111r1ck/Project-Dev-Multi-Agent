@@ -23,6 +23,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 _CONTINUE_JOBS: dict[str, threading.Thread] = {}
 _CONTINUE_JOBS_LOCK = threading.RLock()
 _CONTINUE_JOB_STATUS: dict[str, dict[str, Any]] = {}
+_RUNNING_PROJECTS: set[str] = set()
 
 
 class RunRequest(BaseModel):
@@ -46,6 +47,19 @@ class ExportRunRequest(BaseModel):
         "review",
         "diagnostics",
     ]
+
+
+def _try_acquire_project_run(project_id: str) -> bool:
+    with _CONTINUE_JOBS_LOCK:
+        if project_id in _RUNNING_PROJECTS:
+            return False
+        _RUNNING_PROJECTS.add(project_id)
+        return True
+
+
+def _release_project_run(project_id: str) -> None:
+    with _CONTINUE_JOBS_LOCK:
+        _RUNNING_PROJECTS.discard(project_id)
 
 
 def _serialize_interrupt(item: Any) -> Any:
@@ -165,6 +179,7 @@ def _run_continue_in_background(
                 status = "failed"
                 error = f"继续执行后读取状态失败: {snapshot_exc}"
     finally:
+        _release_project_run(project_id)
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS[project_id] = {
                 "status": status,
@@ -184,41 +199,49 @@ async def run_project_analysis(
     req: RunRequest,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    if not _try_acquire_project_run(req.project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
+        )
     config = {"configurable": {"thread_id": req.project_id}}
     preserved_term_cluster_memory: dict[str, Any] = {}
     try:
-        snapshot = await run_in_threadpool(compiled_graph.get_state, config)
-        values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
-        memory = values.get("term_cluster_memory", {})
-        if isinstance(memory, dict):
-            preserved_term_cluster_memory = memory
-    except Exception:
-        preserved_term_cluster_memory = {}
+        try:
+            snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+            values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+            memory = values.get("term_cluster_memory", {})
+            if isinstance(memory, dict):
+                preserved_term_cluster_memory = memory
+        except Exception:
+            preserved_term_cluster_memory = {}
 
-    result = await run_in_threadpool(
-        compiled_graph.invoke,
-        {
-            "project_id": req.project_id,
-            "thread_id": req.project_id,
-            "raw_requirement": req.raw_requirement,
-            "human_feedback_notes": [],
-            "project_decisions": {},
-            "assumption_pack": {},
-            "errors": [],
-            "need_human": False,
-            "human_rounds": 0,
-            "max_human_rounds": settings.human_gate_max_rounds,
-            "review_rounds": 0,
-            "max_review_rounds": settings.review_max_rounds,
-            "next_step": "requirement_analyst",
-            "term_cluster_memory": preserved_term_cluster_memory,
-        },
-        config,
-    )
-    with _CONTINUE_JOBS_LOCK:
-        _CONTINUE_JOB_STATUS.pop(req.project_id, None)
+        result = await run_in_threadpool(
+            compiled_graph.invoke,
+            {
+                "project_id": req.project_id,
+                "thread_id": req.project_id,
+                "raw_requirement": req.raw_requirement,
+                "human_feedback_notes": [],
+                "project_decisions": {},
+                "assumption_pack": {},
+                "errors": [],
+                "need_human": False,
+                "human_rounds": 0,
+                "max_human_rounds": settings.human_gate_max_rounds,
+                "review_rounds": 0,
+                "max_review_rounds": settings.review_max_rounds,
+                "next_step": "requirement_analyst",
+                "term_cluster_memory": preserved_term_cluster_memory,
+            },
+            config,
+        )
+        with _CONTINUE_JOBS_LOCK:
+            _CONTINUE_JOB_STATUS.pop(req.project_id, None)
 
-    return _format_run_response(req.project_id, result)
+        return _format_run_response(req.project_id, result)
+    finally:
+        _release_project_run(req.project_id)
 
 
 @router.post("/{project_id}/resume")
@@ -227,15 +250,23 @@ async def resume_project_analysis(
     req: ResumeRunRequest,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    if not _try_acquire_project_run(project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
+        )
     config = {"configurable": {"thread_id": project_id}}
-    result = await run_in_threadpool(
-        compiled_graph.invoke,
-        Command(resume=req.human_feedback),
-        config,
-    )
-    with _CONTINUE_JOBS_LOCK:
-        _CONTINUE_JOB_STATUS.pop(project_id, None)
-    return _format_run_response(project_id, result)
+    try:
+        result = await run_in_threadpool(
+            compiled_graph.invoke,
+            Command(resume=req.human_feedback),
+            config,
+        )
+        with _CONTINUE_JOBS_LOCK:
+            _CONTINUE_JOB_STATUS.pop(project_id, None)
+        return _format_run_response(project_id, result)
+    finally:
+        _release_project_run(project_id)
 
 
 @router.post("/{project_id}/continue")
@@ -244,7 +275,7 @@ async def continue_project_analysis(
     compiled_graph=Depends(get_compiled_graph),
 ):
     config = {"configurable": {"thread_id": project_id}}
-    snapshot = compiled_graph.get_state(config)
+    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
     next_nodes = list(getattr(snapshot, "next", ()) or ())
 
     if _snapshot_has_pending_interrupt(snapshot):
@@ -293,6 +324,15 @@ async def continue_project_analysis(
                 "error": previous_status.get("error"),
             }
 
+        if project_id in _RUNNING_PROJECTS:
+            return {
+                "project_id": project_id,
+                "status": "in_progress",
+                "next": next_nodes,
+                "message": "当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
+            }
+
+        _RUNNING_PROJECTS.add(project_id)
         baseline_checkpoint_id = (
             (getattr(snapshot, "config", {}) or {})
             .get("configurable", {})
