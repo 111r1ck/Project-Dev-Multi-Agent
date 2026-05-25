@@ -7,6 +7,7 @@ from typing import Any
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.config import settings
+from app.services.observability import start_timer, track_operation
 
 _CHECKPOINTER: Any | None = None
 _SQLITE_CONN: sqlite3.Connection | None = None
@@ -52,70 +53,88 @@ def is_checkpointer_healthy(checkpointer: Any) -> bool:
 def get_checkpointer():
     global _CHECKPOINTER, _SQLITE_CONN, _POSTGRES_CTX
 
+    started_at = start_timer()
+    backend = settings.checkpointer_backend.lower().strip()
+    status = "success"
     with _CHECKPOINTER_LOCK:
-        if _CHECKPOINTER is not None:
-            if is_checkpointer_healthy(_CHECKPOINTER):
-                return _CHECKPOINTER
-            _close_cached_resources()
+        try:
+            if _CHECKPOINTER is not None:
+                if is_checkpointer_healthy(_CHECKPOINTER):
+                    return _CHECKPOINTER
+                _close_cached_resources()
 
-        backend = settings.checkpointer_backend.lower().strip()
-        if backend == "postgres":
-            try:
-                from langgraph.checkpoint.postgres import PostgresSaver
-            except ImportError:
-                _CHECKPOINTER = InMemorySaver()
-                return _CHECKPOINTER
-
-            conn_string = settings.checkpointer_postgres_dsn.strip()
-            if not conn_string:
-                raise ValueError(
-                    "CHECKPOINTER_BACKEND=postgres requires CHECKPOINTER_POSTGRES_DSN"
-                )
-
-            def _open_postgres_saver():
-                ctx = PostgresSaver.from_conn_string(
-                    conn_string,
-                    pipeline=settings.checkpointer_postgres_pipeline,
-                )
-                saver = ctx.__enter__()
-                return saver, ctx
-
-            _CHECKPOINTER, _POSTGRES_CTX = _open_postgres_saver()
-            if settings.checkpointer_postgres_auto_setup:
+            if backend == "postgres":
                 try:
-                    _CHECKPOINTER.setup()
-                except Exception as exc:
-                    # Rare startup race/driver edge case: reopen once on closed connection.
-                    if "connection is closed" not in str(exc).lower():
-                        raise
-                    _close_cached_resources()
-                    _CHECKPOINTER, _POSTGRES_CTX = _open_postgres_saver()
-                    _CHECKPOINTER.setup()
-            return _CHECKPOINTER
+                    from langgraph.checkpoint.postgres import PostgresSaver
+                except ImportError:
+                    _CHECKPOINTER = InMemorySaver()
+                    return _CHECKPOINTER
 
-        if backend == "sqlite":
-            try:
-                from langgraph.checkpoint.sqlite import SqliteSaver
-            except ImportError:
-                _CHECKPOINTER = InMemorySaver()
+                conn_string = settings.checkpointer_postgres_dsn.strip()
+                if not conn_string:
+                    status = "failed"
+                    raise ValueError(
+                        "CHECKPOINTER_BACKEND=postgres requires CHECKPOINTER_POSTGRES_DSN"
+                    )
+
+                def _open_postgres_saver():
+                    ctx = PostgresSaver.from_conn_string(
+                        conn_string,
+                        pipeline=settings.checkpointer_postgres_pipeline,
+                    )
+                    saver = ctx.__enter__()
+                    return saver, ctx
+
+                _CHECKPOINTER, _POSTGRES_CTX = _open_postgres_saver()
+                if settings.checkpointer_postgres_auto_setup:
+                    try:
+                        _CHECKPOINTER.setup()
+                    except Exception as exc:
+                        # Rare startup race/driver edge case: reopen once on closed connection.
+                        if "connection is closed" not in str(exc).lower():
+                            status = "failed"
+                            raise
+                        _close_cached_resources()
+                        _CHECKPOINTER, _POSTGRES_CTX = _open_postgres_saver()
+                        _CHECKPOINTER.setup()
                 return _CHECKPOINTER
 
-            sqlite_path = settings.checkpointer_sqlite_path
-            sqlite_dir = os.path.dirname(sqlite_path)
-            if sqlite_dir:
-                os.makedirs(sqlite_dir, exist_ok=True)
+            if backend == "sqlite":
+                try:
+                    from langgraph.checkpoint.sqlite import SqliteSaver
+                except ImportError:
+                    _CHECKPOINTER = InMemorySaver()
+                    return _CHECKPOINTER
 
-            _SQLITE_CONN = sqlite3.connect(sqlite_path, check_same_thread=False)
-            _CHECKPOINTER = SqliteSaver(_SQLITE_CONN)
+                sqlite_path = settings.checkpointer_sqlite_path
+                sqlite_dir = os.path.dirname(sqlite_path)
+                if sqlite_dir:
+                    os.makedirs(sqlite_dir, exist_ok=True)
+
+                _SQLITE_CONN = sqlite3.connect(sqlite_path, check_same_thread=False)
+                _CHECKPOINTER = SqliteSaver(_SQLITE_CONN)
+                return _CHECKPOINTER
+
+            _CHECKPOINTER = InMemorySaver()
             return _CHECKPOINTER
-
-        _CHECKPOINTER = InMemorySaver()
-        return _CHECKPOINTER
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            track_operation(
+                domain="checkpoint",
+                operation="get_checkpointer",
+                status=status,
+                started_at=started_at,
+                backend=backend,
+            )
 
 
 def purge_thread_checkpoints(thread_id: str) -> dict[str, Any]:
     """Delete all persisted checkpoints for a given thread/project id."""
+    started_at = start_timer()
     backend = settings.checkpointer_backend.lower().strip()
+    status = "success"
     tables = (
         "checkpoints",
         "checkpoint_blobs",
@@ -124,103 +143,117 @@ def purge_thread_checkpoints(thread_id: str) -> dict[str, Any]:
     )
 
     with _CHECKPOINTER_LOCK:
-        if backend == "memory":
-            return {
-                "backend": backend,
-                "thread_id": thread_id,
-                "deleted_rows": 0,
-                "deleted_tables": [],
-                "message": "memory backend has no persisted checkpoints to delete",
-            }
+        try:
+            if backend == "memory":
+                return {
+                    "backend": backend,
+                    "thread_id": thread_id,
+                    "deleted_rows": 0,
+                    "deleted_tables": [],
+                    "message": "memory backend has no persisted checkpoints to delete",
+                }
 
-        saver = get_checkpointer()
-        conn = getattr(saver, "conn", None)
-        deleted_rows = 0
-        deleted_tables: list[str] = []
+            saver = get_checkpointer()
+            conn = getattr(saver, "conn", None)
+            deleted_rows = 0
+            deleted_tables: list[str] = []
 
-        if backend == "sqlite":
-            if conn is None:
-                raise RuntimeError("sqlite checkpointer connection is unavailable")
-            cur = conn.cursor()
-            try:
-                for table in tables:
+            if backend == "sqlite":
+                if conn is None:
+                    status = "failed"
+                    raise RuntimeError("sqlite checkpointer connection is unavailable")
+                cur = conn.cursor()
+                try:
+                    for table in tables:
+                        try:
+                            cur.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+                            if cur.rowcount and cur.rowcount > 0:
+                                deleted_rows += int(cur.rowcount)
+                                deleted_tables.append(table)
+                        except sqlite3.OperationalError:
+                            # Table may not exist in current schema/version.
+                            continue
+                    conn.commit()
+                finally:
+                    cur.close()
+                return {
+                    "backend": backend,
+                    "thread_id": thread_id,
+                    "deleted_rows": deleted_rows,
+                    "deleted_tables": deleted_tables,
+                }
+
+            if backend == "postgres":
+                if conn is None:
+                    status = "failed"
+                    raise RuntimeError("postgres checkpointer connection is unavailable")
+
+                def _first_value(row: Any) -> Any:
+                    if row is None:
+                        return None
+                    if isinstance(row, dict):
+                        for _k, v in row.items():
+                            return v
+                        return None
                     try:
-                        cur.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+                        return row[0]
+                    except Exception:
+                        return row
+
+                with conn.cursor() as cur:
+                    existing_tables: set[str] = set()
+                    thread_scoped_tables: set[str] = set()
+                    for table in tables:
+                        cur.execute("SELECT to_regclass(%s)", (table,))
+                        row = cur.fetchone()
+                        if _first_value(row):
+                            existing_tables.add(table)
+                    for table in existing_tables:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM information_schema.columns
+                            WHERE table_name = %s
+                              AND column_name = 'thread_id'
+                            LIMIT 1
+                            """,
+                            (table,),
+                        )
+                        if cur.fetchone():
+                            thread_scoped_tables.add(table)
+                    for table in tables:
+                        if table not in thread_scoped_tables:
+                            continue
+                        cur.execute(
+                            f'DELETE FROM "{table}" WHERE thread_id = %s',
+                            (thread_id,),
+                        )
                         if cur.rowcount and cur.rowcount > 0:
                             deleted_rows += int(cur.rowcount)
                             deleted_tables.append(table)
-                    except sqlite3.OperationalError:
-                        # Table may not exist in current schema/version.
-                        continue
                 conn.commit()
-            finally:
-                cur.close()
+                return {
+                    "backend": backend,
+                    "thread_id": thread_id,
+                    "deleted_rows": deleted_rows,
+                    "deleted_tables": deleted_tables,
+                }
+
             return {
                 "backend": backend,
                 "thread_id": thread_id,
                 "deleted_rows": deleted_rows,
                 "deleted_tables": deleted_tables,
             }
-
-        if backend == "postgres":
-            if conn is None:
-                raise RuntimeError("postgres checkpointer connection is unavailable")
-
-            def _first_value(row: Any) -> Any:
-                if row is None:
-                    return None
-                if isinstance(row, dict):
-                    for _k, v in row.items():
-                        return v
-                    return None
-                try:
-                    return row[0]
-                except Exception:
-                    return row
-
-            with conn.cursor() as cur:
-                existing_tables: set[str] = set()
-                thread_scoped_tables: set[str] = set()
-                for table in tables:
-                    cur.execute("SELECT to_regclass(%s)", (table,))
-                    row = cur.fetchone()
-                    if _first_value(row):
-                        existing_tables.add(table)
-                for table in existing_tables:
-                    cur.execute(
-                        """
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = %s
-                          AND column_name = 'thread_id'
-                        LIMIT 1
-                        """,
-                        (table,),
-                    )
-                    if cur.fetchone():
-                        thread_scoped_tables.add(table)
-                for table in tables:
-                    if table not in thread_scoped_tables:
-                        continue
-                    cur.execute(
-                        f'DELETE FROM "{table}" WHERE thread_id = %s',
-                        (thread_id,),
-                    )
-                    if cur.rowcount and cur.rowcount > 0:
-                        deleted_rows += int(cur.rowcount)
-                        deleted_tables.append(table)
-            conn.commit()
-            return {
-                "backend": backend,
-                "thread_id": thread_id,
-                "deleted_rows": deleted_rows,
-                "deleted_tables": deleted_tables,
-            }
-
-        return {
-            "backend": backend,
-            "thread_id": thread_id,
-            "deleted_rows": 0,
-            "deleted_tables": [],
-            "message": "unsupported backend for purge",
-        }
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            track_operation(
+                domain="checkpoint",
+                operation="purge_thread_checkpoints",
+                status=status,
+                started_at=started_at,
+                backend=backend,
+                thread_id=thread_id,
+            )

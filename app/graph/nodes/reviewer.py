@@ -15,6 +15,7 @@ from app.graph.nodes.common import (
 )
 from app.graph.state import ProjectState
 from app.services.architecture_conflict_checker import check_architecture_conflict
+from app.services.observability import increment, start_timer, track_operation
 from app.services.reviewer_cache import load_cached_review, save_cached_review
 
 
@@ -107,46 +108,100 @@ def _apply_review_outcome(
     review_report: dict,
     passed: bool,
 ) -> ProjectState:
+    started_at = start_timer()
     review_rounds = int(state.get("review_rounds", 0))
     max_review_rounds = int(state.get("max_review_rounds", settings.review_max_rounds))
+    route_target = "finish"
+    outcome_status = "passed" if passed else "failed"
 
     if passed:
-        return {
+        out = {
             **state,
             "review_report": review_report,
             "next_step": "finish",
         }
+        track_operation(
+            domain="review",
+            operation="review_outcome",
+            status=outcome_status,
+            started_at=started_at,
+            project_id=state.get("project_id") or state.get("thread_id"),
+            route_target=route_target,
+            review_rounds=review_rounds,
+            max_review_rounds=max_review_rounds,
+        )
+        increment("review_reflow_total", 1.0, target=route_target, reason="passed")
+        return out
 
     next_review_rounds = review_rounds + 1
     if next_review_rounds >= max_review_rounds:
         conditional_pass = _build_conditional_pass_if_possible(state, review_report)
         if conditional_pass is not None:
-            return {
+            out = {
                 **state,
                 "review_report": conditional_pass,
                 "review_rounds": next_review_rounds,
                 "next_step": "finish",
             }
+            track_operation(
+                domain="review",
+                operation="review_outcome",
+                status="conditional_pass",
+                started_at=started_at,
+                project_id=state.get("project_id") or state.get("thread_id"),
+                route_target="finish",
+                review_rounds=next_review_rounds,
+                max_review_rounds=max_review_rounds,
+            )
+            increment("review_reflow_total", 1.0, target="finish", reason="conditional_pass")
+            return out
         errors = list(state.get("errors", []))
         errors.append(
             f"评审未通过，已达到最大复审轮次({max_review_rounds})，请根据review_report人工修正后再运行。"
         )
-        return {
+        out = {
             **state,
             "review_report": review_report,
             "review_rounds": next_review_rounds,
             "errors": errors,
             "next_step": "finish",
         }
+        track_operation(
+            domain="review",
+            operation="review_outcome",
+            status="failed_max_rounds",
+            started_at=started_at,
+            project_id=state.get("project_id") or state.get("thread_id"),
+            route_target="finish",
+            review_rounds=next_review_rounds,
+            max_review_rounds=max_review_rounds,
+        )
+        increment("review_reflow_total", 1.0, target="finish", reason="max_rounds")
+        return out
 
-    return {
+    route_target = (
+        "prompt_builder"
+        if _is_prompt_quality_only_review(review_report)
+        else "planner"
+    )
+    out = {
         **state,
         "review_report": review_report,
         "review_rounds": next_review_rounds,
-        "next_step": "prompt_builder"
-        if _is_prompt_quality_only_review(review_report)
-        else "planner",
+        "next_step": route_target,
     }
+    track_operation(
+        domain="review",
+        operation="review_outcome",
+        status=outcome_status,
+        started_at=started_at,
+        project_id=state.get("project_id") or state.get("thread_id"),
+        route_target=route_target,
+        review_rounds=next_review_rounds,
+        max_review_rounds=max_review_rounds,
+    )
+    increment("review_reflow_total", 1.0, target=route_target, reason="rework")
+    return out
 
 
 def _has_blocking_issue(review_report: dict) -> bool:

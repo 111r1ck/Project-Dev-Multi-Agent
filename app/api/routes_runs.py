@@ -18,6 +18,12 @@ from app.services.distributed_lock import (
     acquire_project_execution_lock,
     release_project_execution_lock,
 )
+from app.services.observability import (
+    increment,
+    snapshot_metrics,
+    start_timer,
+    track_operation,
+)
 from app.services.report_renderer import render_result
 from app.config import settings
 from app.storage.checkpoints import purge_thread_checkpoints
@@ -51,6 +57,14 @@ class ExportRunRequest(BaseModel):
         "review",
         "diagnostics",
     ]
+
+
+@router.get("/_metrics")
+async def get_runs_observability_metrics():
+    return {
+        "status": "ok",
+        "metrics": snapshot_metrics(),
+    }
 
 
 def _try_acquire_project_run(project_id: str) -> bool:
@@ -150,6 +164,7 @@ def _run_continue_in_background(
     baseline_checkpoint_id: str | None,
     dist_lock_token: str | None,
 ) -> None:
+    started_at = start_timer()
     status = "completed"
     error: str | None = None
     latest_checkpoint_id: str | None = None
@@ -184,6 +199,22 @@ def _run_continue_in_background(
                 status = "failed"
                 error = f"继续执行后读取状态失败: {snapshot_exc}"
     finally:
+        increment(
+            "workflow_continue_total",
+            1.0,
+            status=status,
+        )
+        if status == "no_progress":
+            increment("workflow_continue_no_progress_total", 1.0)
+        track_operation(
+            domain="workflow",
+            operation="continue_background",
+            status=status,
+            started_at=started_at,
+            project_id=project_id,
+            baseline_checkpoint_id=baseline_checkpoint_id,
+            latest_checkpoint_id=latest_checkpoint_id,
+        )
         release_project_execution_lock(project_id, dist_lock_token)
         _release_project_run(project_id)
         with _CONTINUE_JOBS_LOCK:
@@ -205,7 +236,17 @@ async def run_project_analysis(
     req: RunRequest,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    started_at = start_timer()
+    op_status = "failed"
     if not _try_acquire_project_run(req.project_id):
+        op_status = "conflict_local_lock"
+        track_operation(
+            domain="workflow",
+            operation="run",
+            status=op_status,
+            started_at=started_at,
+            project_id=req.project_id,
+        )
         raise HTTPException(
             status_code=409,
             detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
@@ -219,45 +260,97 @@ async def run_project_analysis(
             req.project_id,
         )
         if not acquired_dist_lock:
+            op_status = "conflict_distributed_lock"
             raise HTTPException(
                 status_code=409,
                 detail="当前项目正在由其他服务实例执行，请稍后重试。",
             )
 
         try:
+            read_started = start_timer()
             snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+            track_operation(
+                domain="checkpoint",
+                operation="read_state",
+                status="success",
+                started_at=read_started,
+                project_id=req.project_id,
+                route="run",
+            )
             values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
             memory = values.get("term_cluster_memory", {})
             if isinstance(memory, dict):
                 preserved_term_cluster_memory = memory
         except Exception:
+            track_operation(
+                domain="checkpoint",
+                operation="read_state",
+                status="failed",
+                started_at=read_started,
+                project_id=req.project_id,
+                route="run",
+            )
             preserved_term_cluster_memory = {}
 
-        result = await run_in_threadpool(
-            compiled_graph.invoke,
-            {
-                "project_id": req.project_id,
-                "thread_id": req.project_id,
-                "raw_requirement": req.raw_requirement,
-                "human_feedback_notes": [],
-                "project_decisions": {},
-                "assumption_pack": {},
-                "errors": [],
-                "need_human": False,
-                "human_rounds": 0,
-                "max_human_rounds": settings.human_gate_max_rounds,
-                "review_rounds": 0,
-                "max_review_rounds": settings.review_max_rounds,
-                "next_step": "requirement_analyst",
-                "term_cluster_memory": preserved_term_cluster_memory,
-            },
-            config,
-        )
+        invoke_started = start_timer()
+        try:
+            result = await run_in_threadpool(
+                compiled_graph.invoke,
+                {
+                    "project_id": req.project_id,
+                    "thread_id": req.project_id,
+                    "raw_requirement": req.raw_requirement,
+                    "human_feedback_notes": [],
+                    "project_decisions": {},
+                    "assumption_pack": {},
+                    "errors": [],
+                    "need_human": False,
+                    "human_rounds": 0,
+                    "max_human_rounds": settings.human_gate_max_rounds,
+                    "review_rounds": 0,
+                    "max_review_rounds": settings.review_max_rounds,
+                    "next_step": "requirement_analyst",
+                    "term_cluster_memory": preserved_term_cluster_memory,
+                },
+                config,
+            )
+            track_operation(
+                domain="checkpoint",
+                operation="write_invoke",
+                status="success",
+                started_at=invoke_started,
+                project_id=req.project_id,
+                route="run",
+            )
+        except Exception:
+            track_operation(
+                domain="checkpoint",
+                operation="write_invoke",
+                status="failed",
+                started_at=invoke_started,
+                project_id=req.project_id,
+                route="run",
+            )
+            raise
+        op_status = "interrupted" if result.get("__interrupt__") else "success"
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS.pop(req.project_id, None)
 
         return _format_run_response(req.project_id, result)
+    except HTTPException:
+        raise
+    except Exception:
+        op_status = "failed"
+        raise
     finally:
+        track_operation(
+            domain="workflow",
+            operation="run",
+            status=op_status,
+            started_at=started_at,
+            project_id=req.project_id,
+        )
+        increment("workflow_run_total", 1.0, status=op_status)
         await run_in_threadpool(
             release_project_execution_lock,
             req.project_id,
@@ -272,7 +365,17 @@ async def resume_project_analysis(
     req: ResumeRunRequest,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    started_at = start_timer()
+    op_status = "failed"
     if not _try_acquire_project_run(project_id):
+        op_status = "conflict_local_lock"
+        track_operation(
+            domain="workflow",
+            operation="resume",
+            status=op_status,
+            started_at=started_at,
+            project_id=project_id,
+        )
         raise HTTPException(
             status_code=409,
             detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
@@ -285,20 +388,55 @@ async def resume_project_analysis(
             project_id,
         )
         if not acquired_dist_lock:
+            op_status = "conflict_distributed_lock"
             raise HTTPException(
                 status_code=409,
                 detail="当前项目正在由其他服务实例执行，请稍后重试。",
             )
 
-        result = await run_in_threadpool(
-            compiled_graph.invoke,
-            Command(resume=req.human_feedback),
-            config,
-        )
+        invoke_started = start_timer()
+        try:
+            result = await run_in_threadpool(
+                compiled_graph.invoke,
+                Command(resume=req.human_feedback),
+                config,
+            )
+            track_operation(
+                domain="checkpoint",
+                operation="write_invoke",
+                status="success",
+                started_at=invoke_started,
+                project_id=project_id,
+                route="resume",
+            )
+        except Exception:
+            track_operation(
+                domain="checkpoint",
+                operation="write_invoke",
+                status="failed",
+                started_at=invoke_started,
+                project_id=project_id,
+                route="resume",
+            )
+            raise
+        op_status = "interrupted" if result.get("__interrupt__") else "success"
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS.pop(project_id, None)
         return _format_run_response(project_id, result)
+    except HTTPException:
+        raise
+    except Exception:
+        op_status = "failed"
+        raise
     finally:
+        track_operation(
+            domain="workflow",
+            operation="resume",
+            status=op_status,
+            started_at=started_at,
+            project_id=project_id,
+        )
+        increment("workflow_resume_total", 1.0, status=op_status)
         await run_in_threadpool(
             release_project_execution_lock,
             project_id,
@@ -312,12 +450,43 @@ async def continue_project_analysis(
     project_id: str,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    started_at = start_timer()
+    op_status = "failed"
     config = {"configurable": {"thread_id": project_id}}
-    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+    checkpoint_read_started = start_timer()
+    try:
+        snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+        track_operation(
+            domain="checkpoint",
+            operation="read_state",
+            status="success",
+            started_at=checkpoint_read_started,
+            project_id=project_id,
+            route="continue",
+        )
+    except Exception:
+        track_operation(
+            domain="checkpoint",
+            operation="read_state",
+            status="failed",
+            started_at=checkpoint_read_started,
+            project_id=project_id,
+            route="continue",
+        )
+        raise
     next_nodes = list(getattr(snapshot, "next", ()) or ())
     dist_lock_token: str | None = None
 
     if _snapshot_has_pending_interrupt(snapshot):
+        op_status = "interrupted_pending"
+        track_operation(
+            domain="workflow",
+            operation="continue",
+            status=op_status,
+            started_at=started_at,
+            project_id=project_id,
+        )
+        increment("workflow_continue_request_total", 1.0, status=op_status)
         return {
             "project_id": project_id,
             "status": "interrupted",
@@ -327,6 +496,15 @@ async def continue_project_analysis(
 
     if not next_nodes:
         values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
+        op_status = "already_completed"
+        track_operation(
+            domain="workflow",
+            operation="continue",
+            status=op_status,
+            started_at=started_at,
+            project_id=project_id,
+        )
+        increment("workflow_continue_request_total", 1.0, status=op_status)
         return {
             "project_id": project_id,
             "status": "completed",
@@ -338,6 +516,15 @@ async def continue_project_analysis(
     with _CONTINUE_JOBS_LOCK:
         running_job = _CONTINUE_JOBS.get(project_id)
         if running_job is not None and running_job.is_alive():
+            op_status = "in_progress_existing_job"
+            track_operation(
+                domain="workflow",
+                operation="continue",
+                status=op_status,
+                started_at=started_at,
+                project_id=project_id,
+            )
+            increment("workflow_continue_request_total", 1.0, status=op_status)
             return {
                 "project_id": project_id,
                 "status": "in_progress",
@@ -347,6 +534,15 @@ async def continue_project_analysis(
 
         previous_status = _CONTINUE_JOB_STATUS.get(project_id)
         if previous_status and previous_status.get("status") == "failed":
+            op_status = "failed_previous_run"
+            track_operation(
+                domain="workflow",
+                operation="continue",
+                status=op_status,
+                started_at=started_at,
+                project_id=project_id,
+            )
+            increment("workflow_continue_request_total", 1.0, status=op_status)
             return {
                 "project_id": project_id,
                 "status": "failed",
@@ -355,6 +551,15 @@ async def continue_project_analysis(
                 "error": previous_status.get("error"),
             }
         if previous_status and previous_status.get("status") == "no_progress":
+            op_status = "failed_previous_no_progress"
+            track_operation(
+                domain="workflow",
+                operation="continue",
+                status=op_status,
+                started_at=started_at,
+                project_id=project_id,
+            )
+            increment("workflow_continue_request_total", 1.0, status=op_status)
             return {
                 "project_id": project_id,
                 "status": "failed",
@@ -364,6 +569,15 @@ async def continue_project_analysis(
             }
 
         if project_id in _RUNNING_PROJECTS:
+            op_status = "in_progress_local_lock"
+            track_operation(
+                domain="workflow",
+                operation="continue",
+                status=op_status,
+                started_at=started_at,
+                project_id=project_id,
+            )
+            increment("workflow_continue_request_total", 1.0, status=op_status)
             return {
                 "project_id": project_id,
                 "status": "in_progress",
@@ -378,6 +592,15 @@ async def continue_project_analysis(
     )
     if not acquired_dist_lock:
         _release_project_run(project_id)
+        op_status = "in_progress_distributed_lock"
+        track_operation(
+            domain="workflow",
+            operation="continue",
+            status=op_status,
+            started_at=started_at,
+            project_id=project_id,
+        )
+        increment("workflow_continue_request_total", 1.0, status=op_status)
         return {
             "project_id": project_id,
             "status": "in_progress",
@@ -391,6 +614,15 @@ async def continue_project_analysis(
             if running_job is not None and running_job.is_alive():
                 release_project_execution_lock(project_id, dist_lock_token)
                 _release_project_run(project_id)
+                op_status = "in_progress_existing_job_after_lock"
+                track_operation(
+                    domain="workflow",
+                    operation="continue",
+                    status=op_status,
+                    started_at=started_at,
+                    project_id=project_id,
+                )
+                increment("workflow_continue_request_total", 1.0, status=op_status)
                 return {
                     "project_id": project_id,
                     "status": "in_progress",
@@ -423,6 +655,7 @@ async def continue_project_analysis(
             )
             _CONTINUE_JOBS[project_id] = job
             job.start()
+            op_status = "started_background"
     except Exception:
         await run_in_threadpool(
             release_project_execution_lock,
@@ -430,8 +663,17 @@ async def continue_project_analysis(
             dist_lock_token,
         )
         _release_project_run(project_id)
+        op_status = "failed"
         raise
 
+    track_operation(
+        domain="workflow",
+        operation="continue",
+        status=op_status,
+        started_at=started_at,
+        project_id=project_id,
+    )
+    increment("workflow_continue_request_total", 1.0, status=op_status)
     return {
         "project_id": project_id,
         "status": "in_progress",
@@ -445,8 +687,28 @@ async def get_project_run_state(
     project_id: str,
     compiled_graph=Depends(get_compiled_graph),
 ):
+    started_at = start_timer()
     config = {"configurable": {"thread_id": project_id}}
-    snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+    try:
+        snapshot = await run_in_threadpool(compiled_graph.get_state, config)
+        track_operation(
+            domain="checkpoint",
+            operation="read_state",
+            status="success",
+            started_at=started_at,
+            project_id=project_id,
+            route="state",
+        )
+    except Exception:
+        track_operation(
+            domain="checkpoint",
+            operation="read_state",
+            status="failed",
+            started_at=started_at,
+            project_id=project_id,
+            route="state",
+        )
+        raise
     state = _serialize_snapshot(snapshot)
     pending_interrupts = _extract_pending_interrupts_from_snapshot(snapshot)
     with _CONTINUE_JOBS_LOCK:
@@ -474,10 +736,30 @@ async def get_project_run_history(
     limit: int = Query(20, ge=1, le=200),
     compiled_graph=Depends(get_compiled_graph),
 ):
+    started_at = start_timer()
     config = {"configurable": {"thread_id": project_id}}
-    snapshots = await run_in_threadpool(
-        lambda: list(compiled_graph.get_state_history(config, limit=limit))
-    )
+    try:
+        snapshots = await run_in_threadpool(
+            lambda: list(compiled_graph.get_state_history(config, limit=limit))
+        )
+        track_operation(
+            domain="checkpoint",
+            operation="read_history",
+            status="success",
+            started_at=started_at,
+            project_id=project_id,
+            route="history",
+        )
+    except Exception:
+        track_operation(
+            domain="checkpoint",
+            operation="read_history",
+            status="failed",
+            started_at=started_at,
+            project_id=project_id,
+            route="history",
+        )
+        raise
     return {
         "project_id": project_id,
         "count": len(snapshots),
