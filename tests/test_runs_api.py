@@ -294,3 +294,109 @@ def test_run_releases_project_lock_after_failure(monkeypatch):
         assert "p-failure" not in running_projects
     finally:
         app.dependency_overrides.pop(get_compiled_graph, None)
+
+
+def test_run_rejects_when_distributed_lock_is_occupied(monkeypatch):
+    class FakeGraph:
+        def get_state(self, _config):
+            class Snapshot:
+                values = {}
+
+            return Snapshot()
+
+        def invoke(self, payload, config):
+            return payload
+
+    monkeypatch.setattr("app.api.routes_runs._RUNNING_PROJECTS", set())
+    monkeypatch.setattr(
+        "app.api.routes_runs.acquire_project_execution_lock",
+        lambda _project_id: (False, None),
+    )
+    async def _allow_always(_self, _request, _rule):
+        return True, 999
+
+    monkeypatch.setattr(
+        "app.api.middleware_rate_limit.RedisRateLimitMiddleware._allow",
+        _allow_always,
+    )
+    app.dependency_overrides[get_compiled_graph] = lambda: FakeGraph()
+
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/runs",
+            json={"project_id": "p-dist-lock", "raw_requirement": "demo requirement"},
+        )
+        assert response.status_code == 409
+        assert "其他服务实例执行" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)
+
+
+def test_resume_rejects_when_distributed_lock_is_occupied(monkeypatch):
+    class FakeGraph:
+        def invoke(self, payload, config):
+            return {"ok": True}
+
+    monkeypatch.setattr("app.api.routes_runs._RUNNING_PROJECTS", set())
+    monkeypatch.setattr(
+        "app.api.routes_runs.acquire_project_execution_lock",
+        lambda _project_id: (False, None),
+    )
+    async def _allow_always(_self, _request, _rule):
+        return True, 999
+
+    monkeypatch.setattr(
+        "app.api.middleware_rate_limit.RedisRateLimitMiddleware._allow",
+        _allow_always,
+    )
+    app.dependency_overrides[get_compiled_graph] = lambda: FakeGraph()
+
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/runs/p-dist-lock/resume",
+            json={"human_feedback": {"note": "x"}},
+        )
+        assert response.status_code == 409
+        assert "其他服务实例执行" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)
+
+
+def test_continue_returns_in_progress_when_distributed_lock_is_occupied(monkeypatch):
+    class FakeGraph:
+        def get_state(self, _config):
+            class Snapshot:
+                next = ("planner",)
+                tasks = ()
+                values = {}
+                config = {"configurable": {"thread_id": "p-dist-lock"}}
+
+            return Snapshot()
+
+    monkeypatch.setattr("app.api.routes_runs._CONTINUE_JOBS", {})
+    monkeypatch.setattr("app.api.routes_runs._CONTINUE_JOB_STATUS", {})
+    monkeypatch.setattr("app.api.routes_runs._RUNNING_PROJECTS", set())
+    monkeypatch.setattr(
+        "app.api.routes_runs.acquire_project_execution_lock",
+        lambda _project_id: (False, None),
+    )
+    async def _allow_always(_self, _request, _rule):
+        return True, 999
+
+    monkeypatch.setattr(
+        "app.api.middleware_rate_limit.RedisRateLimitMiddleware._allow",
+        _allow_always,
+    )
+    app.dependency_overrides[get_compiled_graph] = lambda: FakeGraph()
+
+    try:
+        client = TestClient(app)
+        response = client.post("/runs/p-dist-lock/continue")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "in_progress"
+        assert "其他服务实例执行" in payload["message"]
+    finally:
+        app.dependency_overrides.pop(get_compiled_graph, None)

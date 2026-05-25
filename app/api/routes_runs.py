@@ -14,6 +14,10 @@ from app.services.export_service import (
     build_run_export_content,
     export_run_artifact,
 )
+from app.services.distributed_lock import (
+    acquire_project_execution_lock,
+    release_project_execution_lock,
+)
 from app.services.report_renderer import render_result
 from app.config import settings
 from app.storage.checkpoints import purge_thread_checkpoints
@@ -144,6 +148,7 @@ def _run_continue_in_background(
     config: dict[str, Any],
     project_id: str,
     baseline_checkpoint_id: str | None,
+    dist_lock_token: str | None,
 ) -> None:
     status = "completed"
     error: str | None = None
@@ -179,6 +184,7 @@ def _run_continue_in_background(
                 status = "failed"
                 error = f"继续执行后读取状态失败: {snapshot_exc}"
     finally:
+        release_project_execution_lock(project_id, dist_lock_token)
         _release_project_run(project_id)
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS[project_id] = {
@@ -204,9 +210,20 @@ async def run_project_analysis(
             status_code=409,
             detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
         )
+    lock_token: str | None = None
     config = {"configurable": {"thread_id": req.project_id}}
     preserved_term_cluster_memory: dict[str, Any] = {}
     try:
+        acquired_dist_lock, lock_token = await run_in_threadpool(
+            acquire_project_execution_lock,
+            req.project_id,
+        )
+        if not acquired_dist_lock:
+            raise HTTPException(
+                status_code=409,
+                detail="当前项目正在由其他服务实例执行，请稍后重试。",
+            )
+
         try:
             snapshot = await run_in_threadpool(compiled_graph.get_state, config)
             values = jsonable_encoder(getattr(snapshot, "values", {}) or {})
@@ -241,6 +258,11 @@ async def run_project_analysis(
 
         return _format_run_response(req.project_id, result)
     finally:
+        await run_in_threadpool(
+            release_project_execution_lock,
+            req.project_id,
+            lock_token,
+        )
         _release_project_run(req.project_id)
 
 
@@ -255,8 +277,19 @@ async def resume_project_analysis(
             status_code=409,
             detail="当前项目已有执行中的 run/resume/continue 请求，请稍后重试。",
         )
+    lock_token: str | None = None
     config = {"configurable": {"thread_id": project_id}}
     try:
+        acquired_dist_lock, lock_token = await run_in_threadpool(
+            acquire_project_execution_lock,
+            project_id,
+        )
+        if not acquired_dist_lock:
+            raise HTTPException(
+                status_code=409,
+                detail="当前项目正在由其他服务实例执行，请稍后重试。",
+            )
+
         result = await run_in_threadpool(
             compiled_graph.invoke,
             Command(resume=req.human_feedback),
@@ -266,6 +299,11 @@ async def resume_project_analysis(
             _CONTINUE_JOB_STATUS.pop(project_id, None)
         return _format_run_response(project_id, result)
     finally:
+        await run_in_threadpool(
+            release_project_execution_lock,
+            project_id,
+            lock_token,
+        )
         _release_project_run(project_id)
 
 
@@ -277,6 +315,7 @@ async def continue_project_analysis(
     config = {"configurable": {"thread_id": project_id}}
     snapshot = await run_in_threadpool(compiled_graph.get_state, config)
     next_nodes = list(getattr(snapshot, "next", ()) or ())
+    dist_lock_token: str | None = None
 
     if _snapshot_has_pending_interrupt(snapshot):
         return {
@@ -333,25 +372,65 @@ async def continue_project_analysis(
             }
 
         _RUNNING_PROJECTS.add(project_id)
-        baseline_checkpoint_id = (
-            (getattr(snapshot, "config", {}) or {})
-            .get("configurable", {})
-            .get("checkpoint_id")
-        )
-        _CONTINUE_JOB_STATUS[project_id] = {
-            "status": "running",
-            "error": None,
-            "baseline_checkpoint_id": baseline_checkpoint_id,
-            "started_at": _now_iso(),
+    acquired_dist_lock, dist_lock_token = await run_in_threadpool(
+        acquire_project_execution_lock,
+        project_id,
+    )
+    if not acquired_dist_lock:
+        _release_project_run(project_id)
+        return {
+            "project_id": project_id,
+            "status": "in_progress",
+            "next": next_nodes,
+            "message": "当前项目正在由其他服务实例执行，请稍后重试。",
         }
-        job = threading.Thread(
-            target=_run_continue_in_background,
-            args=(compiled_graph, config, project_id, baseline_checkpoint_id),
-            daemon=True,
-            name=f"continue-{project_id}",
+    try:
+        with _CONTINUE_JOBS_LOCK:
+            # Recheck in case another local request raced in before lock acquisition.
+            running_job = _CONTINUE_JOBS.get(project_id)
+            if running_job is not None and running_job.is_alive():
+                release_project_execution_lock(project_id, dist_lock_token)
+                _release_project_run(project_id)
+                return {
+                    "project_id": project_id,
+                    "status": "in_progress",
+                    "next": next_nodes,
+                    "message": "已有继续执行任务在后台运行，请稍后刷新 state/history。",
+                }
+
+            baseline_checkpoint_id = (
+                (getattr(snapshot, "config", {}) or {})
+                .get("configurable", {})
+                .get("checkpoint_id")
+            )
+            _CONTINUE_JOB_STATUS[project_id] = {
+                "status": "running",
+                "error": None,
+                "baseline_checkpoint_id": baseline_checkpoint_id,
+                "started_at": _now_iso(),
+            }
+            job = threading.Thread(
+                target=_run_continue_in_background,
+                args=(
+                    compiled_graph,
+                    config,
+                    project_id,
+                    baseline_checkpoint_id,
+                    dist_lock_token,
+                ),
+                daemon=True,
+                name=f"continue-{project_id}",
+            )
+            _CONTINUE_JOBS[project_id] = job
+            job.start()
+    except Exception:
+        await run_in_threadpool(
+            release_project_execution_lock,
+            project_id,
+            dist_lock_token,
         )
-        _CONTINUE_JOBS[project_id] = job
-        job.start()
+        _release_project_run(project_id)
+        raise
 
     return {
         "project_id": project_id,

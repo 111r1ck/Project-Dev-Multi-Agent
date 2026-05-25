@@ -100,6 +100,17 @@ class Settings:
     reviewer_cache_enabled: bool = parse_bool(os.getenv("REVIEWER_CACHE_ENABLED", ""), False)
     reviewer_cache_prefix: str = os.getenv("REVIEWER_CACHE_PREFIX", "reviewer_cache")
     reviewer_cache_ttl_seconds: int = int(os.getenv("REVIEWER_CACHE_TTL_SECONDS", "21600"))
+    distributed_lock_enabled: bool = parse_bool(
+        os.getenv("DISTRIBUTED_LOCK_ENABLED", ""),
+        False,
+    )
+    distributed_lock_prefix: str = os.getenv(
+        "DISTRIBUTED_LOCK_PREFIX",
+        "distlock:run",
+    )
+    distributed_lock_ttl_seconds: int = int(
+        os.getenv("DISTRIBUTED_LOCK_TTL_SECONDS", "900")
+    )
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
     review_max_rounds: int = int(os.getenv("REVIEW_MAX_ROUNDS", "2"))
     coverage_min_evidence_hits: int = int(os.getenv("COVERAGE_MIN_EVIDENCE_HITS", "2"))
