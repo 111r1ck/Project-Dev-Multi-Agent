@@ -19,6 +19,7 @@ from app.services.distributed_lock import (
     release_project_execution_lock,
 )
 from app.services.continue_queue import enqueue_continue_job, get_queue_size
+from app.services.human_interrupt_hook import notify_human_interrupt_required
 from app.services.observability import (
     increment,
     snapshot_metrics,
@@ -136,6 +137,34 @@ def _format_run_response(project_id: str, result: dict[str, Any]) -> dict[str, A
         "result": render_result(result),
         "state": result,
     }
+
+
+def _extract_checkpoint_id_from_snapshot(snapshot: Any) -> str | None:
+    config = getattr(snapshot, "config", {}) or {}
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    checkpoint_id = configurable.get("checkpoint_id")
+    return str(checkpoint_id) if checkpoint_id is not None else None
+
+
+def _trigger_human_interrupt_hook(
+    *,
+    project_id: str,
+    checkpoint_id: str | None,
+    source: str,
+    pending_interrupts: list[Any],
+    next_nodes: list[str] | None = None,
+) -> None:
+    try:
+        notify_human_interrupt_required(
+            project_id=project_id,
+            checkpoint_id=checkpoint_id,
+            source=source,
+            pending_interrupts=pending_interrupts,
+            next_nodes=next_nodes,
+        )
+    except Exception:
+        # Hook failures should never block workflow/API response.
+        return
 
 
 def _snapshot_has_pending_interrupt(snapshot: Any) -> bool:
@@ -334,6 +363,16 @@ async def run_project_analysis(
             )
             raise
         op_status = "interrupted" if result.get("__interrupt__") else "success"
+        if result.get("__interrupt__"):
+            _trigger_human_interrupt_hook(
+                project_id=req.project_id,
+                checkpoint_id=None,
+                source="run_result_interrupt",
+                pending_interrupts=[
+                    _serialize_interrupt(item) for item in (result.get("__interrupt__") or [])
+                ],
+                next_nodes=[],
+            )
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS.pop(req.project_id, None)
 
@@ -421,6 +460,16 @@ async def resume_project_analysis(
             )
             raise
         op_status = "interrupted" if result.get("__interrupt__") else "success"
+        if result.get("__interrupt__"):
+            _trigger_human_interrupt_hook(
+                project_id=project_id,
+                checkpoint_id=None,
+                source="resume_result_interrupt",
+                pending_interrupts=[
+                    _serialize_interrupt(item) for item in (result.get("__interrupt__") or [])
+                ],
+                next_nodes=[],
+            )
         with _CONTINUE_JOBS_LOCK:
             _CONTINUE_JOB_STATUS.pop(project_id, None)
         return _format_run_response(project_id, result)
@@ -479,6 +528,15 @@ async def continue_project_analysis(
     dist_lock_token: str | None = None
 
     if _snapshot_has_pending_interrupt(snapshot):
+        checkpoint_id = _extract_checkpoint_id_from_snapshot(snapshot)
+        pending_interrupts = _extract_pending_interrupts_from_snapshot(snapshot)
+        _trigger_human_interrupt_hook(
+            project_id=project_id,
+            checkpoint_id=checkpoint_id,
+            source="continue_pending_interrupt",
+            pending_interrupts=pending_interrupts,
+            next_nodes=next_nodes,
+        )
         op_status = "interrupted_pending"
         track_operation(
             domain="workflow",
@@ -708,6 +766,15 @@ async def get_project_run_state(
         raise
     state = _serialize_snapshot(snapshot)
     pending_interrupts = _extract_pending_interrupts_from_snapshot(snapshot)
+    if pending_interrupts:
+        checkpoint_id = _extract_checkpoint_id_from_snapshot(snapshot)
+        _trigger_human_interrupt_hook(
+            project_id=project_id,
+            checkpoint_id=checkpoint_id,
+            source="state_pending_interrupt",
+            pending_interrupts=pending_interrupts,
+            next_nodes=state["next"],
+        )
     with _CONTINUE_JOBS_LOCK:
         continue_status = dict(_CONTINUE_JOB_STATUS.get(project_id, {}))
         running_job = _CONTINUE_JOBS.get(project_id)

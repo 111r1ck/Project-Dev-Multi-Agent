@@ -111,6 +111,22 @@ class Settings:
     distributed_lock_ttl_seconds: int = int(
         os.getenv("DISTRIBUTED_LOCK_TTL_SECONDS", "900")
     )
+    human_interrupt_hook_enabled: bool = parse_bool(
+        os.getenv("HUMAN_INTERRUPT_HOOK_ENABLED", ""),
+        False,
+    )
+    human_interrupt_hook_url: str = os.getenv("HUMAN_INTERRUPT_HOOK_URL", "")
+    human_interrupt_hook_token: str = os.getenv("HUMAN_INTERRUPT_HOOK_TOKEN", "")
+    human_interrupt_hook_timeout_seconds: float = float(
+        os.getenv("HUMAN_INTERRUPT_HOOK_TIMEOUT_SECONDS", "2.0")
+    )
+    human_interrupt_hook_idempotency_ttl_seconds: int = int(
+        os.getenv("HUMAN_INTERRUPT_HOOK_IDEMPOTENCY_TTL_SECONDS", "86400")
+    )
+    human_interrupt_hook_idempotency_prefix: str = os.getenv(
+        "HUMAN_INTERRUPT_HOOK_IDEMPOTENCY_PREFIX",
+        "hook:human_interrupt",
+    )
     human_gate_max_rounds: int = int(os.getenv("HUMAN_GATE_MAX_ROUNDS", "3"))
     review_max_rounds: int = int(os.getenv("REVIEW_MAX_ROUNDS", "2"))
     coverage_min_evidence_hits: int = int(os.getenv("COVERAGE_MIN_EVIDENCE_HITS", "2"))
