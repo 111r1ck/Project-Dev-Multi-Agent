@@ -18,6 +18,7 @@ from app.services.distributed_lock import (
     acquire_project_execution_lock,
     release_project_execution_lock,
 )
+from app.services.continue_queue import enqueue_continue_job, get_queue_size
 from app.services.observability import (
     increment,
     snapshot_metrics,
@@ -30,7 +31,7 @@ from app.storage.checkpoints import purge_thread_checkpoints
 from langgraph.types import Command
 
 router = APIRouter(prefix="/runs", tags=["runs"])
-_CONTINUE_JOBS: dict[str, threading.Thread] = {}
+_CONTINUE_JOBS: dict[str, Any] = {}
 _CONTINUE_JOBS_LOCK = threading.RLock()
 _CONTINUE_JOB_STATUS: dict[str, dict[str, Any]] = {}
 _RUNNING_PROJECTS: set[str] = set()
@@ -63,6 +64,7 @@ class ExportRunRequest(BaseModel):
 async def get_runs_observability_metrics():
     return {
         "status": "ok",
+        "continue_queue_size": get_queue_size(),
         "metrics": snapshot_metrics(),
     }
 
@@ -215,6 +217,7 @@ def _run_continue_in_background(
             baseline_checkpoint_id=baseline_checkpoint_id,
             latest_checkpoint_id=latest_checkpoint_id,
         )
+        increment("workflow_continue_queue_processed_total", 1.0, status=status)
         release_project_execution_lock(project_id, dist_lock_token)
         _release_project_run(project_id)
         with _CONTINUE_JOBS_LOCK:
@@ -226,9 +229,7 @@ def _run_continue_in_background(
                 "latest_next": latest_next,
                 "finished_at": _now_iso(),
             }
-            current = _CONTINUE_JOBS.get(project_id)
-            if current is threading.current_thread():
-                _CONTINUE_JOBS.pop(project_id, None)
+            _CONTINUE_JOBS.pop(project_id, None)
 
 
 @router.post("")
@@ -641,21 +642,17 @@ async def continue_project_analysis(
                 "baseline_checkpoint_id": baseline_checkpoint_id,
                 "started_at": _now_iso(),
             }
-            job = threading.Thread(
-                target=_run_continue_in_background,
-                args=(
-                    compiled_graph,
-                    config,
-                    project_id,
-                    baseline_checkpoint_id,
-                    dist_lock_token,
-                ),
-                daemon=True,
-                name=f"continue-{project_id}",
+            handle = enqueue_continue_job(
+                project_id,
+                _run_continue_in_background,
+                compiled_graph,
+                config,
+                project_id,
+                baseline_checkpoint_id,
+                dist_lock_token,
             )
-            _CONTINUE_JOBS[project_id] = job
-            job.start()
-            op_status = "started_background"
+            _CONTINUE_JOBS[project_id] = handle
+            op_status = "queued"
     except Exception:
         await run_in_threadpool(
             release_project_execution_lock,
@@ -678,7 +675,7 @@ async def continue_project_analysis(
         "project_id": project_id,
         "status": "in_progress",
         "next": next_nodes,
-        "message": "已在后台继续执行，请稍后刷新 state/history。",
+        "message": "已加入后台队列继续执行，请稍后刷新 state/history。",
     }
 
 

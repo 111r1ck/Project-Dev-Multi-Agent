@@ -29,6 +29,26 @@ def test_metrics_endpoint_returns_snapshot(monkeypatch):
     assert isinstance(payload["metrics"], dict)
 
 
+def test_prometheus_metrics_endpoint_returns_text():
+    reset_metrics()
+    client = TestClient(app)
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers.get("content-type", "")
+    assert "\n" in response.text
+
+
+def test_alerts_endpoint_returns_structure():
+    reset_metrics()
+    client = TestClient(app)
+    response = client.get("/alerts")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "active" in payload
+    assert "active_count" in payload
+    assert "counters" in payload
+
+
 def test_run_success_increments_workflow_metric(monkeypatch):
     class FakeGraph:
         def get_state(self, _config):
